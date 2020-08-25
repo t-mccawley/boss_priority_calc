@@ -120,6 +120,14 @@ class BossData:
             loot.addEP(spec_class,ep_map[spec_class])
 
         self.loot_tables[boss].append(loot)
+    
+    def calc_upgrades(self,raid_data):
+        # calculate upgrade for a given raid
+        for boss in self.bosses:
+            for loot in loot_tables[boss]:
+                x = 1
+                upgrade_per_boss[boss] = 1
+        return
 
 # instantiate BossData
 bd = BossData()
