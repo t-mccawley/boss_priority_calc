@@ -94,7 +94,9 @@ class BossData:
 
     def __init__(self):
         self.bosses = {
+            # ONY
             "Onyxia",
+            # MC
             "Lucifron",
             "Magmadar",
             "Gehennas",
@@ -105,46 +107,106 @@ class BossData:
             "Sulfuron Harbinger",
             "Majordomo Executus",
             "Ragnaros",
+            # BWL
+            "Razorgore the Untamed",
+            "Vaelastrasz the Corrupt",
+            "Broodlord Lashlayer",
+            "Firemaw",
+            "Ebonroc",
+            "Flamegor",
+            "Chromaggus",
+            "Nefarian",
+            # ZG
+            "High Priest Venoxis",
+            "High Priestess Jeklik",
+            "High Priestess Mar'li",
+            "High Priest Thekal",
+            "High Priestess Arlokk",
+            "Hakkar",
+            "Bloodlord Mandokir",
+            "Gahz'ranka",
+            "Jin'do the Hexxer",
+            "Edge of Madness",
+            # AQ20
+            "Kurinnaxx",
+            "General Rajaxx",
+            "Moam",
+            "Buru the Gorger",
+            "Ayamiss the Hunter",
+            "Ossirian the Unscarred",
+            # AQ40
+            "The Prophet Skeram",
+            "Lord Kri",
+            "Princess Yauj",
+            "Vem",
+            "Battleguard Sartura",
+            "Fankriss the Unyielding",
+            "Viscidus",
+            "Princess Huhuran",
+            "Twin Emperors",
+            "Ouro",
+            "C'Thun",
         }
-        self.loot_tables = {} # map from boss name to array of loot items
-        self.upgrade_per_boss = {} # map from boss name to arrray of ep upgrade values for a given raid
+        self.clear_time = {} # map from boss name to expected time to clear boss in minutes
+        self.loot_tables = {} # map from boss name to array of loot names
+        self.loot_db = {} # map from item name to loot item
+        self.expected_upgrade_per_boss = {} # map from boss name to map of expected ep upgrade values for each character in a raid
         # init
         for boss in self.bosses:
+            self.clear_time[boss] = None
             self.loot_tables[boss] = []
-            self.upgrade_per_boss[boss] = np.array()
+            self.expected_upgrade_per_boss[boss] = {}
+
+    def addClearTime(self,boss,clear_time):
+        self.clear_time[boss] = clear_time
 
     def addLoot(self,boss,loot_name,slot,drop_chance,ep_map):
-        loot = Loot(loot_name,slot,drop_chance)
+        self.loot_tables[boss] = loot_name
 
+        loot = Loot(loot_name,slot,drop_chance)
         for spec_class in ep_map:
             loot.addEP(spec_class,ep_map[spec_class])
 
-        self.loot_tables[boss].append(loot)
-    
-    def calc_upgrades(self,raid_data):
-        # calculate upgrade for a given raid
+        self.loot_db[loot_name] = loot
+        
+    def calc_expected_upgrades(self,raid_data):
+        # calculate expected upgrade for a given raid of characters
         for boss in self.bosses:
-            for loot in loot_tables[boss]:
-                x = 1
-                upgrade_per_boss[boss] = 1
+            for char in raid_data.raid:
+                char_name = char.name
+                char_sc = char.spec_class
+                # init total expected upgrade
+                self.expected_upgrade_per_boss[boss][char_name] = 0
+                for loot_name in loot_tables[boss]:
+                    # fetch new loot
+                    loot_new = self.loot_db[loot_name]
+                    slot = loot_new.slot
+                    drop_chance = loot_new.drop_chance
+                    ep_new = loot_new.ep_map[char_sc]
+                    # fetch current loot
+                    loot_current = self.loot_db[char.gear[slot]]
+                    ep_current = loot_current.ep_map[char_sc]
+                    # calculate ep upgrade
+                    if ep_new > ep_current:
+                        self.expected_upgrade_per_boss[boss][char_name] += (ep_new - ep_current)*drop_chance               
         return
-
-# instantiate BossData
-bd = BossData()
-
-# add loot items to boss loot tables
-bd.addLoot(
-    boss=,
-    loot_name=,
-    slot=,
-    drop_chance=,
-    ep_map=,
-    )
+    
+    def calc_mean_eupm(self):
+        # calculates mean expected upgrade per minute per boss
+        mean_eupm = {}
+        for boss in self.bosses:
+            mean_eupm[boss] = 0.0
+            for char_name in self.expected_upgrade_per_boss[boss]:
+                mean_eupm[boss] += self.expected_upgrade_per_boss[boss][char_name]
+            mean_eupm[boss] /= len(self.expected_upgrade_per_boss[boss])
+            mean_eupm[boss] /= len(self.clear_time[boss])
+        return(OrderedDict(sorted(mean_eupm.items(), key=lambda t: t[1])))
 
 # instantiate RaidData
 rd = RaidData()
 
 # add character to raid data
+# Druid
 rd.addChar(
     name=,
     spec_class=,
@@ -169,6 +231,32 @@ rd.addChar(
     head_enchant=,
     legs_enchant=,
     )
+# Hunter
+# Mage
 
-# scan all bosses and collect average ep upgrade for raid
+# instantiate BossData
+bd = BossData()
+
+# add loot items to boss loot tables
+bd.addLoot(
+    boss=,
+    loot_name=,
+    slot=,
+    drop_chance=,
+    ep_map=,
+    )
+
+# add clear times per boss
+bd.addClearTime(
+    boss=,
+    clear_time=,
+    )
+
+# calculate raid upgrades
 bd.calc_upgrades(rd)
+
+# get map of boss to mean expected upgrade per minute
+mean_eupm = bd.calc_mean_eupm()
+
+# plot
+plt.bar(mean_eupm.keys(),mean_eupm.values())
