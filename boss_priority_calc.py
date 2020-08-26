@@ -38,8 +38,7 @@ class Slot(IntEnum):
     OFF_HAND = 14
     TWO_HAND = 15
     RANGED = 16
-    HEAD_ENCHANT = 17
-    LEGS_ENCHANT = 18
+    ZG_ENCHANTS = 17
     SIZE = 19
 
 class Raid(IntEnum):
@@ -56,12 +55,12 @@ RaidToBossMap[Raid.ONY] = ["Onyxia"]
 RaidToBossMap[Raid.MC] = ["Lucifron","Magmadar","Gehennas","Garr","Baron Geddon","Shazzrah","Golemagg the Incinerator","Sulfuron Harbinger","Majordomo Executus","Ragnaros","MC Trash"]
 RaidToBossMap[Raid.BWL] = ["Razorgore the Untamed","Vaelastrasz the Corrupt","Broodlord Lashlayer","Firemaw","Ebonroc","Flamegor","Chromaggus","Nefarian","BWL Trash"]
 RaidToBossMap[Raid.ZG] = ["Jin'do the Hexxer","High Priest Thekal","Bloodlord Mandokir","High Priestess Mar'li","High Priest Venoxis","High Priestess Jeklik","Edge of Madness","High Priestess Arlokk","Hakkar","Gahz'ranka"]
-RaidToBossMap[Raid.AQ20] = ["Kurinnaxx","General Rajaxx","Moam","Buru the Gorger","Ayamiss the Hunter","Ossirian the Unscarred"]
+RaidToBossMap[Raid.AQ20] = ["Kurinnaxx","General Rajaxx","Moam","Buru the Gorger","Ayamiss the Hunter","Ossirian the Unscarred","AQ20 Trash"]
 RaidToBossMap[Raid.AQ40] = ["The Prophet Skeram","Vem","Princess Yauj","Lord Kri","Battleguard Sartura","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro","C'Thun","AQ40 Trash"]
 
 class Character:
 
-    def __init__(self,name,spec_class,head,neck,shoulder,chest,waist,legs,feet,wrist,hands,fingers,trinkets,back,mh,oh,th,ranged,head_enchant,legs_enchant):
+    def __init__(self,name,spec_class,head,neck,shoulder,chest,waist,legs,feet,wrist,hands,fingers,trinkets,back,mh,oh,th,ranged,zg_enchants):
         # character name
         self.name = name
         # character SpecClass
@@ -84,8 +83,7 @@ class Character:
         self.gear[Slot.OFF_HAND] = oh
         self.gear[Slot.TWO_HAND] = th
         self.gear[Slot.RANGED] = ranged
-        self.gear[Slot.HEAD_ENCHANT] = head_enchant
-        self.gear[Slot.LEGS_ENCHANT] = legs_enchant
+        self.gear[Slot.ZG_ENCHANTS] = zg_enchants #count
         
 class Loot:
 
@@ -131,31 +129,54 @@ class BossPrioCalc:
     def addBoss(self,name,raid,clear_time):
         self.bosses[name] = Boss(name,raid,clear_time)
 
-    def addLoot(self,boss,loot_name,slot,drop_chance,ep_map):
+    def addLoot(self,boss_list,loot_name,slot,drop_chance_list,ep_map):
         # add actual object to loot_db
         loot = Loot(loot_name,slot)
         # construct ep_map
         for spec_class in ep_map:
             loot.addEP(spec_class,ep_map[spec_class])
 
+        # check if loot already exists
+        if loot_name in self.loot_db:
+            print("{} is already in loot_db".format(loot_name))
+            raise RuntimeError("Duplicate loot_name found")
+
         self.loot_db[loot_name] = loot
 
-        if boss is not None:
-            # add data to boss
-            self.bosses[boss].loot_drop_chance[loot_name] = drop_chance
-            self.bosses[boss].loot_table.append(loot_name)
+        # add to bosses
+        # check that same length arrays
+        if len(boss_list) != len(drop_chance_list):
+            print("{} has inconsistent length arrays".format(loot_name))
+            raise RuntimeError("Array lengths")
+
+        for i in range(len(boss_list)):
+            boss = boss_list[i]
+            drop_chance = drop_chance_list[i]
+            if boss != "CURRENT":
+                # add data to boss
+                self.bosses[boss].loot_drop_chance[loot_name] = drop_chance
+                self.bosses[boss].loot_table.append(loot_name)
         
-    def addChar(self,name,spec_class,head,neck,shoulder,chest,waist,legs,feet,wrist,hands,fingers,trinkets,back,mh,oh,th,ranged,head_enchant,legs_enchant):
-        self.raid[name] = Character(name,spec_class,head,neck,shoulder,chest,waist,legs,feet,wrist,hands,fingers,trinkets,back,mh,oh,th,ranged,head_enchant,legs_enchant)
+    def addChar(self,name,spec_class,head,neck,shoulder,chest,waist,legs,feet,wrist,hands,fingers,trinkets,back,mh,oh,th,ranged,zg_enchants):
+        if name in self.raid:
+            print("{} is already in raid".format(name))
+            raise RuntimeError("Duplicate name in raid")
+
+        self.raid[name] = Character(name,spec_class,head,neck,shoulder,chest,waist,legs,feet,wrist,hands,fingers,trinkets,back,mh,oh,th,ranged,zg_enchants)
     
     def _getCharBiS(self,char_name,spec_class,slot):
         # returns the BiS item for given slot that player has
         ep = 0
         item_name_print = "NONE"
-        for item_name in self.raid[char_name].gear[slot]:
-            if self.loot_db[item_name].ep_map[spec_class] >= ep:
-                ep = self.loot_db[item_name].ep_map[spec_class]
-                item_name_print = item_name
+        if slot == Slot.ZG_ENCHANTS:
+            item_name = "Primal Hakkari Idol"
+            item_name_print = item_name
+            ep = self.loot_db[item_name].ep_map[spec_class]
+        else:
+            for item_name in self.raid[char_name].gear[slot]:
+                if self.loot_db[item_name].ep_map[spec_class] >= ep:
+                    ep = self.loot_db[item_name].ep_map[spec_class]
+                    item_name_print = item_name
         return(item_name_print,ep)
 
     def calc(self):
@@ -174,8 +195,18 @@ class BossPrioCalc:
                     item_new_print = loot_name
                     ep_new = self.loot_db[loot_name].ep_map[spec_class]
                     item_current_print , ep_current = self._getCharBiS(char_name,spec_class,slot)
-                    if slot == Slot.MAIN_HAND or slot == Slot.OFF_HAND or slot == Slot.TWO_HAND:
-                        # special case
+
+                    # handle special cases
+                    if slot == Slot.ZG_ENCHANTS:
+                        # each character expected to get x enchants
+                        ZG_ENCHANTS_TRGT = 2
+                        item_new_print = "{}x {}".format(ZG_ENCHANTS_TRGT,loot_name)
+                        current_cnt = self.raid[char_name].gear[slot]
+                        item_current_print = "{}x {}".format(current_cnt,loot_name)
+                        ep_new *= ZG_ENCHANTS_TRGT
+                        ep_current *= current_cnt
+                        
+                    elif slot == Slot.MAIN_HAND or slot == Slot.OFF_HAND or slot == Slot.TWO_HAND:
                         # get current items / ep values for weapons
                         item_name_mh_curr , ep_mh_curr = self._getCharBiS(char_name,spec_class,Slot.MAIN_HAND)
                         item_name_oh_curr , ep_oh_curr = self._getCharBiS(char_name,spec_class,Slot.OFF_HAND)
@@ -201,7 +232,7 @@ class BossPrioCalc:
                         if verbose:
                             print("{}: {} ({}) is a {} slot upgrade over {} ({}) for {}".format(boss_name,item_new_print,ep_new,slot.name,item_current_print,ep_current,char_name))
                     
-                    if ep_current == 0 and item_current_print != "NONE":
+                    if ep_current == 0 and item_current_print != "NONE" and slot != slot.ZG_ENCHANTS:
                         print("boss_name: {}, item_current_print: {}, char_name: {}".format(boss_name,item_current_print,char_name))
                         raise RuntimeError("Current EP should not be 0 for item ")
 
@@ -241,7 +272,7 @@ class BossPrioCalc:
         
         # format
         # plt.xticks(rotation=90)
-        plt.grid()
+        plt.grid(axis='x')
         plt.yticks(ticks=y_ticks,labels=y_labels)
         plt.show()
 
@@ -445,6 +476,12 @@ bpc.addBoss(
     raid=Raid.AQ20,
     clear_time=6*AQ20_clear_time/6,
     )
+bpc.addBoss(
+    name="AQ20 Trash",
+    raid=Raid.AQ20,
+    clear_time=AQ20_clear_time,
+    )
+
 # AQ40
 AQ40_clear_time = 240
 bpc.addBoss(
@@ -529,8 +566,7 @@ bpc.addChar(
     oh=["Fire Runed Grimoire"],
     th=[],
     ranged=["Idol of the Moon"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Eighchbar",
@@ -551,8 +587,7 @@ bpc.addChar(
     oh=["Lei of the Lifegiver"],
     th=[],
     ranged=[],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=[],
+    zg_enchants=1,
     )
 bpc.addChar(
     name="Slecht",
@@ -573,8 +608,7 @@ bpc.addChar(
     oh=["Lei of the Lifegiver"],
     th=[],
     ranged=[],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 # Hunter
 bpc.addChar(
@@ -596,8 +630,7 @@ bpc.addChar(
     oh=["Fang of the Faceless"],
     th=[],
     ranged=["Ashjre'thul, Crossbow of Smiting"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Ishney",
@@ -618,8 +651,7 @@ bpc.addChar(
     oh=[],
     th=["Lok'delar, Stave of the Ancient Keepers"],
     ranged=["Ashjre'thul, Crossbow of Smiting"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Irisviiel",
@@ -640,8 +672,7 @@ bpc.addChar(
     oh=[],
     th=["Ashkandi, Greatsword of the Brotherhood"],
     ranged=["Mandokir's Sting"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 # Mage
 bpc.addChar(
@@ -663,8 +694,7 @@ bpc.addChar(
     oh=[],
     th=["Staff of Dominance"],
     ranged=["Stormrager"],
-    head_enchant=[],
-    legs_enchant=[],
+    zg_enchants=0,
     )
 bpc.addChar(
     name="Duhd",
@@ -685,8 +715,7 @@ bpc.addChar(
     oh=["Jin'do's Bag of Whammies"],
     th=[],
     ranged=["Bonecreeper Stylus"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Parisshelton",
@@ -707,8 +736,7 @@ bpc.addChar(
     oh=["Jin'do's Bag of Whammies"],
     th=[],
     ranged=["Touch of Chaos"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Dryrun",
@@ -729,8 +757,7 @@ bpc.addChar(
     oh=["Tome of Fiery Arcana"],
     th=[],
     ranged=["Touch of Chaos"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 # Priest
 bpc.addChar(
@@ -752,8 +779,7 @@ bpc.addChar(
     oh=[],
     th=["Benediction"],
     ranged=["Essence Gatherer"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Necrohealya",
@@ -774,8 +800,7 @@ bpc.addChar(
     oh=["Lei of the Lifegiver"],
     th=[],
     ranged=["Essence Gatherer"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Pythagorean",
@@ -796,8 +821,7 @@ bpc.addChar(
     oh=["Lei of the Lifegiver"],
     th=["Benediction"],
     ranged=["Glowstar Rod of Healing"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Wangcake",
@@ -818,8 +842,7 @@ bpc.addChar(
     oh=["Lei of the Lifegiver"],
     th=["Benediction"],
     ranged=["Essence Gatherer"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 # Rogue
 bpc.addChar(
@@ -841,8 +864,7 @@ bpc.addChar(
     oh=["Brutality Blade"],
     th=[],
     ranged=["Heartstriker"],
-    head_enchant=[],
-    legs_enchant=[],
+    zg_enchants=0,
     )
 bpc.addChar(
     name="Kirilov",
@@ -863,8 +885,7 @@ bpc.addChar(
     oh=["Maladath, Runed Blade of the Black Flight"],
     th=[],
     ranged=["Striker's Mark"],
-    head_enchant=[],
-    legs_enchant=[],
+    zg_enchants=0,
     )
 bpc.addChar(
     name="Stankdik",
@@ -885,8 +906,7 @@ bpc.addChar(
     oh=["Fang of the Faceless"],
     th=[],
     ranged=["Gurubashi Dwarf Destroyer"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 # Shaman
 bpc.addChar(
@@ -908,8 +928,7 @@ bpc.addChar(
     oh=["Lei of the Lifegiver"],
     th=[],
     ranged=[],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    zg_enchants=2,
     )
 bpc.addChar(
     name="Ghazan",
@@ -930,8 +949,7 @@ bpc.addChar(
     oh=["Malistar's Defender"],
     th=[],
     ranged=[],
-    head_enchant=[],
-    legs_enchant=[],
+    zg_enchants=0,
     )
 # Warlock
 bpc.addChar(
@@ -952,55 +970,52 @@ bpc.addChar(
     mh=["Azuresong Mageblade"],
     oh=["Tome of Shadow Force"],
     th=[],
-    ranged=["Wizard's Hand"],
-    head_enchant=["Primal Hakkari Idol"],
-    legs_enchant=["Primal Hakkari Idol"],
+    ranged=["Wizard's Hand of Wrath"],
+    zg_enchants=2,
     )
-# bpc.addChar(
-#     name="Ultimecia",
-#     spec_class=SpecClass.ANY_WARLOCK,
-#     head=["Mish'undare, Circlet of the Mind Flayer"],
-#     neck=["Choker of the Fire Lord"],
-#     shoulder=["Nemesis Spaulders"],
-#     chest=["Bloodvine Vest"],
-#     waist=["Nemesis Belt"],
-#     legs=["Bloodvine Leggings"],
-#     feet=["Bloodvine Boots"],
-#     wrist=["Nemesis Bracers"],
-#     hands=["Ebony Flame Gloves"],
-#     fingers=["Ring of Spell Power","Dragonslayer's Signet"],
-#     trinkets=["Neltharion's Tear","Zandalarian Hero Charm"],
-#     back=["Cloak of the Brood Lord"],
-#     mh=[],
-#     oh=[],
-#     th=["Staff of Dominance"],
-#     ranged=["Touch of Chaos"],
-#     head_enchant=["Primal Hakkari Idol"],
-#     legs_enchant=["Primal Hakkari Idol"],
-#     )
-# bpc.addChar(
-#     name="Gaunz",
-#     spec_class=SpecClass.ANY_WARLOCK,
-#     head=["Nemesis Skullcap"],
-#     neck=["Choker of Enlightenment"],
-#     shoulder=["Nemesis Spaulders"],
-#     chest=["Bloodvine Vest"],
-#     waist=["Nemesis Belt"],
-#     legs=["Bloodvine Leggings"],
-#     feet=["Bloodvine Boots"],
-#     wrist=["Bracers of Arcane Accuracy"],
-#     hands=["Ebony Flame Gloves"],
-#     fingers=["Band of Forced Concentration","Band of Dark Dominion"],
-#     trinkets=["Neltharion's Tear","Zandalarian Hero Charm"],
-#     back=["Cloak of Consumption"],
-#     mh=["Azuresong Mageblade"],
-#     oh=["Jin'do's Bag of Whammies"],
-#     th=[],
-#     ranged=["Skul's Ghastly Touch"],
-#     head_enchant=["Primal Hakkari Idol"],
-#     legs_enchant=["Primal Hakkari Idol"],
-#     )
-# # DPS Warrior
+bpc.addChar(
+    name="Ultimecia",
+    spec_class=SpecClass.ANY_WARLOCK,
+    head=["Mish'undare, Circlet of the Mind Flayer"],
+    neck=["Choker of the Fire Lord"],
+    shoulder=["Nemesis Spaulders"],
+    chest=["Bloodvine Vest"],
+    waist=["Nemesis Belt"],
+    legs=["Bloodvine Leggings"],
+    feet=["Bloodvine Boots"],
+    wrist=["Nemesis Bracers"],
+    hands=["Ebony Flame Gloves"],
+    fingers=["Ring of Spell Power","Dragonslayer's Signet"],
+    trinkets=["Neltharion's Tear","Zandalarian Hero Charm"],
+    back=["Cloak of the Brood Lord"],
+    mh=[],
+    oh=[],
+    th=["Staff of Dominance"],
+    ranged=["Touch of Chaos"],
+    zg_enchants=2,
+    )
+bpc.addChar(
+    name="Gaunz",
+    spec_class=SpecClass.ANY_WARLOCK,
+    head=["Nemesis Skullcap"],
+    neck=["Choker of Enlightenment"],
+    shoulder=["Nemesis Spaulders"],
+    chest=["Bloodvine Vest"],
+    waist=["Nemesis Belt"],
+    legs=["Bloodvine Leggings"],
+    feet=["Bloodvine Boots"],
+    wrist=["Bracers of Arcane Accuracy"],
+    hands=["Ebony Flame Gloves"],
+    fingers=["Band of Forced Concentration","Band of Dark Dominion"],
+    trinkets=["Neltharion's Tear","Zandalarian Hero Charm"],
+    back=["Cloak of Consumption"],
+    mh=["Azuresong Mageblade"],
+    oh=["Jin'do's Bag of Whammies"],
+    th=[],
+    ranged=["Skul's Ghastly Touch"],
+    zg_enchants=2,
+    )
+# DPS Warrior
 # bpc.addChar(
 #     name="Akecheta",
 #     spec_class=SpecClass.FURY_WARRIOR,
@@ -1009,7 +1024,7 @@ bpc.addChar(
 #     shoulder=["Drake Talon Pauldrons"],
 #     chest=["Malfurion's Blessed Bulwark"],
 #     waist=["Onslaught Girdle"],
-#     legs=["Emberweave Leggings"],
+#     legs=["Abyssal Plate Legplates of Striking"],
 #     feet=["Chromatic Boots"],
 #     wrist=["Wristguards of Stability"],
 #     hands=["Edgemaster's Handguards"],
@@ -1020,8 +1035,7 @@ bpc.addChar(
 #     oh=["Brutality Blade"],
 #     th=[],
 #     ranged=["Striker's Mark"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 # bpc.addChar(
 #     name="Flatzz",
@@ -1031,7 +1045,7 @@ bpc.addChar(
 #     shoulder=["Drake Talon Pauldrons"],
 #     chest=["Savage Gladiator Chain"],
 #     waist=["Zandalar Vindicator's Belt"],
-#     legs=["Emberweave Leggings"],
+#     legs=["Eldritch Reinforced Legplates"],
 #     feet=["Chromatic Boots"],
 #     wrist=["Zandalar Vindicator's Armguards"],
 #     hands=["Edgemaster's Handguards"],
@@ -1042,8 +1056,7 @@ bpc.addChar(
 #     oh=["Core Hound Tooth"],
 #     th=[],
 #     ranged=["Striker's Mark"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 # bpc.addChar(
 #     name="Chango",
@@ -1064,8 +1077,7 @@ bpc.addChar(
 #     oh=["Doom's Edge"],
 #     th=[],
 #     ranged=["Blastershot Launcher"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 # bpc.addChar(
 #     name="Dohvyk",
@@ -1086,8 +1098,7 @@ bpc.addChar(
 #     oh=[],
 #     th=["Bonereaver's Edge"],
 #     ranged=["Satyr's Bow"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 # bpc.addChar(
 #     name="Furckinstein",
@@ -1108,8 +1119,7 @@ bpc.addChar(
 #     oh=["Bonescraper"],
 #     th=[],
 #     ranged=["Gurubashi Dwarf Destroyer"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 # bpc.addChar(
 #     name="Dirty",
@@ -1130,8 +1140,7 @@ bpc.addChar(
 #     oh=["Warblade of the Hakkari"],
 #     th=[],
 #     ranged=["Blastershot Launcher"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 # # Tank
 # bpc.addChar(
@@ -1153,8 +1162,7 @@ bpc.addChar(
 #     oh=["Elementium Reinforced Bulwark"],
 #     th=[],
 #     ranged=["Striker's Mark"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 # bpc.addChar(
 #     name="Bandakar",
@@ -1175,8 +1183,7 @@ bpc.addChar(
 #     oh=["Elementium Reinforced Bulwark"],
 #     th=[],
 #     ranged=["Striker's Mark"],
-#     head_enchant=["Primal Hakkari Idol"],
-#     legs_enchant=["Primal Hakkari Idol"],
+#     zg_enchants=2,
 #     )
 # bpc.addChar(
 #     name="Guliveris",
@@ -1197,8 +1204,7 @@ bpc.addChar(
 #     oh=["Doom's Edge"],
 #     th=[],
 #     ranged=["Satyr's Bow"],
-#     head_enchant=["Primal Hakkari Idol"],
-#     legs_enchant=["Primal Hakkari Idol"],
+#     zg_enchants=2,
 #     )
 # bpc.addChar(
 #     name="Pemberstone",
@@ -1219,63 +1225,73 @@ bpc.addChar(
 #     oh=[],
 #     th=["Draconic Maul"],
 #     ranged=["Idol of Brutality"],
-#     head_enchant=[],
-#     legs_enchant=[],
+#     zg_enchants=0,
 #     )
 
 # add loot items to boss loot tables
 # Onyxia
 boss_name = "Onyxia"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Onyxia Tooth Pendant",
     slot=Slot.NECK,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:64,
+        SpecClass.FURY_WARRIOR:52,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
+    loot_name="Dragonslayer's Signet",
+    slot=Slot.FINGER,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:16,
+        SpecClass.FIRE_MAGE:14,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Stormrage Cover",
     slot=Slot.HEAD,
-    drop_chance=18.55,
+    drop_chance_list=[18.55],
     ep_map={
         SpecClass.RESTO_DRUID:62,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Nemesis Skullca",
+    boss_list=[boss_name],
+    loot_name="Nemesis Skullcap",
     slot=Slot.HEAD,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.ANY_WARLOCK:36,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Helmet of Ten Storms",
     slot=Slot.HEAD,
-    drop_chance=15.0,
+    drop_chance_list=[15.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:56,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Halo of Transcendence",
     slot=Slot.HEAD,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.HOLY_PRIEST:105,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Shard of the Scale",
     slot=Slot.TRINKET,
-    drop_chance=5.71,
+    drop_chance_list=[5.71],
     ep_map={
         SpecClass.RESTO_DRUID:48,
         SpecClass.HOLY_PRIEST:56,
@@ -1283,64 +1299,55 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Deathbringer",
     slot=Slot.OFF_HAND,
-    drop_chance=5.86,
+    drop_chance_list=[5.86],
     ep_map={
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Vis'kag the Bloodletter",
     slot=Slot.MAIN_HAND,
-    drop_chance=5.70,
+    drop_chance_list=[5.70],
     ep_map={
         SpecClass.COMBAT_ROGUE:903,
 
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Dragonstalker's Helm",
     slot=Slot.HEAD,
-    drop_chance=29.0,
+    drop_chance_list=[29.0],
     ep_map={
         SpecClass.MARKS_HUNTER:104,
     },
     )  
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Netherwind Crown",
     slot=Slot.HEAD,
-    drop_chance=19.55,
+    drop_chance_list=[19.55],
     ep_map={
         SpecClass.FIRE_MAGE:37,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Dragonslayer's Signet",
-    slot=Slot.FINGER,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:14,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Sapphiron Drape",
     slot=Slot.BACK,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.FIRE_MAGE:17,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bloodfang Hood",
     slot=Slot.HEAD,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:95,
     },
@@ -1349,106 +1356,41 @@ bpc.addLoot(
 # Lucifron
 boss_name = "Lucifron"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cenarion Boots",
     slot=Slot.FEET,
-    drop_chance=22.0,
+    drop_chance_list=[22.0],
     ep_map={
         SpecClass.RESTO_DRUID:38,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Choker of Enlightenment",
     slot=Slot.NECK,
-    drop_chance=23.0,
+    drop_chance_list=[23.0],
     ep_map={
         SpecClass.FIRE_MAGE:20,
         SpecClass.ANY_WARLOCK:21,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Ring of Spell Power",
-    slot=Slot.FINGER,
-    drop_chance=4.00,
-    ep_map={
-        SpecClass.FIRE_MAGE:33,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Salamander Scale Pants",
-    slot=Slot.LEGS,
-    drop_chance=5.0,
-    ep_map={
-        SpecClass.RESTO_SHAMAN:122,
-        SpecClass.RESTO_DRUID:82,
     },
     )
 
 # Magmadar
 boss_name = "Magmadar"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Fire Runed Grimoire",
-    slot=Slot.OFF_HAND,
-    drop_chance=13.0,
-    ep_map={
-        SpecClass.RESTO_DRUID:17,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Nightslayer Pants",
     slot=Slot.LEGS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:97,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Striker's Mark",
     slot=Slot.RANGED,
-    drop_chance=20.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:40,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Quick Strike Ring",
-    slot=Slot.FINGER,
-    drop_chance=12.0,
-    ep_map={
-        SpecClass.MARKS_HUNTER:59,
-        SpecClass.COMBAT_ROGUE:59,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Talisman of Ephemeral Power",
-    slot=Slot.TRINKET,
-    drop_chance=11.00,
-    ep_map={
-        SpecClass.FIRE_MAGE:29,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Mana Igniting Cord",
-    slot=Slot.WAIST,
-    drop_chance=11.00,
-    ep_map={
-        SpecClass.FIRE_MAGE:40,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Aged Core Leather Gloves",
-    slot=Slot.HANDS,
-    drop_chance=7.00,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:40,
     },
@@ -1457,50 +1399,22 @@ bpc.addLoot(
 # Gehennas
 boss_name = "Gehennas"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Ring of Spell Power",
-    slot=Slot.FINGER,
-    drop_chance=7.00,
-    ep_map={
-        SpecClass.FIRE_MAGE:33,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Nightslayer Gloves",
     slot=Slot.HANDS,
-    drop_chance=32.0,
+    drop_chance_list=[32.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:65,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Salamander Scale Pants",
-    slot=Slot.LEGS,
-    drop_chance=5.0,
-    ep_map={
-        SpecClass.RESTO_SHAMAN:122,
-        SpecClass.RESTO_DRUID:82,
     },
     )
 
 # Garr
 boss_name = "Garr"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Fire Runed Grimoire",
-    slot=Slot.OFF_HAND,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.RESTO_DRUID:17,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Aurastone Hammer",
     slot=Slot.MAIN_HAND,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.RESTO_DRUID:43,
         SpecClass.RESTO_SHAMAN:67,
@@ -1508,153 +1422,117 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Earthfury Helmet",
     slot=Slot.HEAD,
-    drop_chance=9.0,
+    drop_chance_list=[9.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:86,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Quick Strike Ring",
-    slot=Slot.FINGER,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.MARKS_HUNTER:59,
-        SpecClass.COMBAT_ROGUE:59,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Arcanist Crown",
     slot=Slot.HEAD,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.FIRE_MAGE:38,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Talisman of Ephemeral Power",
-    slot=Slot.TRINKET,
-    drop_chance=9.00,
-    ep_map={
-        SpecClass.FIRE_MAGE:29,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Mana Igniting Cord",
-    slot=Slot.WAIST,
-    drop_chance=9.00,
-    ep_map={
-        SpecClass.FIRE_MAGE:40,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Brutality Blade",
     slot=Slot.OFF_HAND,
-    drop_chance=19.00,
+    drop_chance_list=[19.00],
     ep_map={
         SpecClass.COMBAT_ROGUE:897,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Gutgore Ripper",
     slot=Slot.MAIN_HAND,
-    drop_chance=19.00,
+    drop_chance_list=[19.00],
     ep_map={
         SpecClass.COMBAT_ROGUE:798,
         SpecClass.FURY_WARRIOR:798,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Aged Core Leather Gloves",
-    slot=Slot.HANDS,
-    drop_chance=7.00,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:40,
     },
     )
 
 # Golemagg the Incinerator
 boss_name = "Golemagg the Incinerator"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
     loot_name="Fire Runed Grimoire",
     slot=Slot.OFF_HAND,
-    drop_chance=4.0,
+    drop_chance_list=[4.0,9.0,13.0],
     ep_map={
         SpecClass.RESTO_DRUID:17,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
     loot_name="Quick Strike Ring",
     slot=Slot.FINGER,
-    drop_chance=4.0,
+    drop_chance_list=[4.0,9.0,12.0],
     ep_map={
         SpecClass.MARKS_HUNTER:59,
         SpecClass.COMBAT_ROGUE:59,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
     loot_name="Talisman of Ephemeral Power",
     slot=Slot.TRINKET,
-    drop_chance=4.00,
+    drop_chance_list=[4.0,9.0,11.0],
     ep_map={
         SpecClass.FIRE_MAGE:29,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Staff of Dominance",
     slot=Slot.TWO_HAND,
-    drop_chance=20.00,
+    drop_chance_list=[20.00],
     ep_map={
         SpecClass.FIRE_MAGE:59,
         SpecClass.ANY_WARLOCK:63,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Azuresong Mageblade",
     slot=Slot.MAIN_HAND,
-    drop_chance=20.00,
+    drop_chance_list=[20.00],
     ep_map={
         SpecClass.FIRE_MAGE:54,
         SpecClass.ANY_WARLOCK:56,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
     loot_name="Mana Igniting Cord",
     slot=Slot.WAIST,
-    drop_chance=4.00,
+    drop_chance_list=[4.0,9.0,11.0],
     ep_map={
         SpecClass.FIRE_MAGE:40,
+        SpecClass.ANY_WARLOCK:42,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Nightslayer Chestpiece",
     slot=Slot.CHEST,
-    drop_chance=20.00,
+    drop_chance_list=[20.00],
     ep_map={
         SpecClass.COMBAT_ROGUE:89,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
     loot_name="Aged Core Leather Gloves",
     slot=Slot.HANDS,
-    drop_chance=7.00,
+    drop_chance_list=[7.0,7.0,7.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:40,
     },
@@ -1663,10 +1541,10 @@ bpc.addLoot(
 # Baron Geddon
 boss_name = "Baron Geddon"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Seal of the Archmagus",
     slot=Slot.FINGER,
-    drop_chance=32.21,
+    drop_chance_list=[32.21],
     ep_map={
         SpecClass.RESTO_DRUID:17,
     },
@@ -1675,50 +1553,32 @@ bpc.addLoot(
 # Shazzrah
 boss_name = "Shazzrah"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Arcanist Gloves",
     slot=Slot.HANDS,
-    drop_chance=32.00,
+    drop_chance_list=[32.0],
     ep_map={
         SpecClass.FIRE_MAGE:17,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Salamander Scale Pants",
-    slot=Slot.LEGS,
-    drop_chance=5.0,
-    ep_map={
-        SpecClass.RESTO_SHAMAN:122,
-        SpecClass.RESTO_DRUID:82,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Ring of Spell Power",
-    slot=Slot.FINGER,
-    drop_chance=4.00,
-    ep_map={
-        SpecClass.FIRE_MAGE:33,
     },
     )
 
 # Sulfuron Harbinger
 boss_name = "Sulfuron Harbinger"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Sulfuron Harbinger","Baron Geddon","Gehennas","Lucifron"],
     loot_name="Ring of Spell Power",
     slot=Slot.FINGER,
-    drop_chance=5.00,
+    drop_chance_list=[5.0,4.0,7.0,4.0],
     ep_map={
         SpecClass.FIRE_MAGE:33,
+        SpecClass.ANY_WARLOCK:33,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Sulfuron Harbinger","Shazzrah","Gehennas","Lucifron"],
     loot_name="Salamander Scale Pants",
     slot=Slot.LEGS,
-    drop_chance=5.0,
+    drop_chance_list=[5.0,5.0,5.0,5.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:122,
         SpecClass.RESTO_DRUID:82,
@@ -1728,20 +1588,29 @@ bpc.addLoot(
 # Majordomo Executus
 boss_name = "Majordomo Executus"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Wild Growth Spaulders",
     slot=Slot.SHOULDER,
-    drop_chance=5.0,
+    drop_chance_list=[5.0],
     ep_map={
         SpecClass.RESTO_DRUID:70,
         SpecClass.RESTO_SHAMAN:76,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
+    loot_name="Sash of Whispered Secrets",
+    slot=Slot.WAIST,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:33,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Cauterizing Band",
     slot=Slot.FINGER,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_DRUID:50,
         SpecClass.HOLY_PRIEST:60,
@@ -1749,31 +1618,40 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Lok'delar, Stave of the Ancient Keepers",
     slot=Slot.TWO_HAND,
-    drop_chance=50.0,
+    drop_chance_list=[50.0],
     ep_map={
         SpecClass.MARKS_HUNTER:57,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Benediction",
     slot=Slot.TWO_HAND,
-    drop_chance=50.0,
+    drop_chance_list=[50.0],
     ep_map={
         SpecClass.HOLY_PRIEST:156,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Gloves of the Hypnotic Flame",
+    slot=Slot.HANDS,
+    drop_chance_list=[24.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:36,
     },
     )
 
 # Ragnaros
 boss_name = "Ragnaros"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Choker of the Fire Lord",
     slot=Slot.NECK,
-    drop_chance=16.67,
+    drop_chance_list=[16.67],
     ep_map={
         SpecClass.RESTO_DRUID:36,
         SpecClass.FIRE_MAGE:35,
@@ -1782,83 +1660,92 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Stormrage Legguards",
     slot=Slot.LEGS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_DRUID:81,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
+    loot_name="Crown of Destruction",
+    slot=Slot.HEAD,
+    drop_chance_list=[10.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:84,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Bloodfang Pants",
     slot=Slot.LEGS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:105,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Band of Sulfuras",
     slot=Slot.FINGER,
-    drop_chance=19.05,
+    drop_chance_list=[19.05],
     ep_map={
         SpecClass.RESTO_DRUID:12,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Dragonstalker's Legguards",
     slot=Slot.LEGS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.MARKS_HUNTER:137,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cloak of the Shrouded Mists",
     slot=Slot.BACK,
-    drop_chance=21.43,
+    drop_chance_list=[21.43],
     ep_map={
         SpecClass.MARKS_HUNTER:61,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Band of Accuria",
     slot=Slot.FINGER,
-    drop_chance=16.67,
+    drop_chance_list=[16.67],
     ep_map={
         SpecClass.MARKS_HUNTER:89,
         SpecClass.COMBAT_ROGUE:66,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Leggings of Transcendence",
     slot=Slot.LEGS,
-    drop_chance=14.0,
+    drop_chance_list=[14.0],
     ep_map={
         SpecClass.HOLY_PRIEST:120,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Perdition's Blade",
     slot=Slot.MAIN_HAND,
-    drop_chance=13.0,
+    drop_chance_list=[13.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:906,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Malistar's Defender",
     slot=Slot.OFF_HAND,
-    drop_chance=7.0,
+    drop_chance_list=[7.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:68,
     },
@@ -1867,28 +1754,28 @@ bpc.addLoot(
 # MC Trash
 boss_name = "MC Trash"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Arcanist Belt",
     slot=Slot.WAIST,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.FIRE_MAGE:18,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Nightslayer Belt",
     slot=Slot.WAIST,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:65,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Nightslayer Bracelets",
     slot=Slot.WRISTS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:38,
     },
@@ -1897,55 +1784,64 @@ bpc.addLoot(
 # Razorgore the Untamed
 boss_name = "Razorgore the Untamed"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bloodfang Bracers",
     slot=Slot.WRISTS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:62,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
+    loot_name="Nemesis Bracers",
+    slot=Slot.WRISTS,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:18,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Bracers of Ten Storms",
     slot=Slot.WRISTS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:55,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Stormrage Bracers",
     slot=Slot.WRISTS,
-    drop_chance=20.00,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_DRUID:43,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bindings of Transcendence",
     slot=Slot.WRISTS,
-    drop_chance=20.00,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.HOLY_PRIEST:67,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Dragonstalker's Bracers",
     slot=Slot.WRISTS,
-    drop_chance=20.00,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.MARKS_HUNTER:64,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Mantle of the Blackwing Cabal",
     slot=Slot.SHOULDER,
-    drop_chance=19.00,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.FIRE_MAGE:37,
         SpecClass.ANY_WARLOCK:38,
@@ -1953,10 +1849,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Netherwind Bindings",
     slot=Slot.WRISTS,
-    drop_chance=20.00,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.FIRE_MAGE:22,
     },
@@ -1965,55 +1861,64 @@ bpc.addLoot(
 # Vaelastrasz the Corrupt
 boss_name = "Vaelastrasz the Corrupt"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Stormrage Belt",
     slot=Slot.WAIST,
-    drop_chance=20.38,
+    drop_chance_list=[20.38],
     ep_map={
         SpecClass.RESTO_DRUID:50,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
+    loot_name="Nemesis Belt",
+    slot=Slot.WAIST,
+    drop_chance_list=[20.38],
+    ep_map={
+        SpecClass.ANY_WARLOCK:40,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Bloodfang Belt",
     slot=Slot.WAIST,
-    drop_chance=23.0,
+    drop_chance_list=[23.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:75,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Dragonstalker's Belt",
     slot=Slot.WAIST,
-    drop_chance=23.10,
+    drop_chance_list=[23.1],
     ep_map={
         SpecClass.MARKS_HUNTER:84,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Mind Quickening Gem",
     slot=Slot.TRINKET,
-    drop_chance=19.00,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.FIRE_MAGE:30,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Belt of Transcendence",
     slot=Slot.WAIST,
-    drop_chance=23.0,
+    drop_chance_list=[23.0],
     ep_map={
         SpecClass.HOLY_PRIEST:67,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Belt of Ten Storms",
     slot=Slot.WAIST,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:48,
     },
@@ -2022,74 +1927,74 @@ bpc.addLoot(
 # Broodlord Lashlayer
 boss_name = "Broodlord Lashlayer"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Stormrage Boots",
     slot=Slot.FEET,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_DRUID:46,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Greaves of Ten Storms",
     slot=Slot.FEET,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:39,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Heartstriker",
     slot=Slot.RANGED,
-    drop_chance=10.0,
+    drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:24,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Boots of Transcendence",
     slot=Slot.FEET,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.HOLY_PRIEST:75,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Dragonstalker's Greaves",
     slot=Slot.FEET,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.MARKS_HUNTER:84,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bracers of Arcane Accuracy",
     slot=Slot.WRISTS,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.FIRE_MAGE:36,
         SpecClass.ANY_WARLOCK:44,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Maladath, Runed Blade of the Black Flight",
     slot=Slot.OFF_HAND,
-    drop_chance=10.0,
+    drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:900,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bloodfang Boots",
     slot=Slot.FEET,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:54,
     },
@@ -2098,66 +2003,92 @@ bpc.addLoot(
 # Firemaw
 boss_name = "Firemaw"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Stormrage Handguards",
-    slot=Slot.HANDS,
-    drop_chance=13.0,
+    boss_list=[boss_name],
+    loot_name="Firemaw's Clutch",
+    slot=Slot.WAIST,
+    drop_chance_list=[16.0],
     ep_map={
-        SpecClass.RESTO_DRUID:55,
+        SpecClass.FIRE_MAGE:37,
+        SpecClass.ANY_WARLOCK:38,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Gauntlets of Ten Storms",
-    slot=Slot.HANDS,
-    drop_chance=6.0,
+    boss_list=[boss_name],
+    loot_name="Cloak of Firemaw",
+    slot=Slot.BACK,
+    drop_chance_list=[16.0],
     ep_map={
-        SpecClass.RESTO_SHAMAN:69,
+        SpecClass.COMBAT_ROGUE:50,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Handguards of Transcendence",
-    slot=Slot.HANDS,
-    drop_chance=13.0,
+    boss_list=[boss_name],
+    loot_name="Claw of the Black Drake",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[16.0],
     ep_map={
-        SpecClass.HOLY_PRIEST:68,
+        SpecClass.COMBAT_ROGUE:955,
+    },
+    )
+
+# Flamegor
+boss_name = "Flamegor"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Shroud of Pure Thought",
+    slot=Slot.BACK,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.RESTO_SHAMAN:82,
+    },
+    )
+
+# Ebonroc
+boss_name = "Ebonroc"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Dragonbreath Hand Cannon",
+    slot=Slot.RANGED,
+    drop_chance_list=[10.0],
+    ep_map={
+        SpecClass.COMBAT_ROGUE:27,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Rejuvenating Gem",
+    boss_list=[boss_name],
+    loot_name="Drake Fang Talisman",
     slot=Slot.TRINKET,
-    drop_chance=12.0,
+    drop_chance_list=[18.0],
     ep_map={
-        SpecClass.RESTO_DRUID:93,
-        SpecClass.HOLY_PRIEST:98,
-        SpecClass.RESTO_SHAMAN:120,
+        SpecClass.COMBAT_ROGUE:92,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Dragonstalker's Gauntlets",
+    boss_list=[boss_name],
+    loot_name="Band of Forced Concentration",
+    slot=Slot.FINGER,
+    drop_chance_list=[16.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:36,
+        SpecClass.ANY_WARLOCK:44,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Ebony Flame Gloves",
     slot=Slot.HANDS,
-    drop_chance=13.0,
+    drop_chance_list=[16.0],
     ep_map={
-        SpecClass.MARKS_HUNTER:84,
+        SpecClass.ANY_WARLOCK:46,
     },
     )
+
+# Three Drakes
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Netherwind Gloves",
-    slot=Slot.HANDS,
-    drop_chance=15.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:35,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Ebonroc","Flamegor","Firemaw"],
     loot_name="Ring of Blackrock",
     slot=Slot.FINGER,
-    drop_chance=13.0,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.HOLY_PRIEST:51,
         SpecClass.RESTO_DRUID:46,
@@ -2165,230 +2096,105 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Cloak of Firemaw",
-    slot=Slot.BACK,
-    drop_chance=16.0,
+    boss_list=["Ebonroc","Flamegor","Firemaw"],
+    loot_name="Rejuvenating Gem",
+    slot=Slot.TRINKET,
+    drop_chance_list=[12.0,12.0,12.0],
     ep_map={
-        SpecClass.COMBAT_ROGUE:50,
+        SpecClass.RESTO_DRUID:93,
+        SpecClass.HOLY_PRIEST:98,
+        SpecClass.RESTO_SHAMAN:120,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Claw of the Black Drake",
-    slot=Slot.MAIN_HAND,
-    drop_chance=16.0,
+    boss_list=["Firemaw","Flamegor","Ebonroc"],
+    loot_name="Drake Talon Pauldrons",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
-        SpecClass.COMBAT_ROGUE:955,
+        SpecClass.FURY_WARRIOR:60,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Bloodfang Gloves",
-    slot=Slot.HANDS,
-    drop_chance=14.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:59,
-    },
-    )
-
-# Flamegor
-boss_name = "Flamegor"
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Firemaw","Flamegor","Ebonroc"],
     loot_name="Stormrage Handguards",
     slot=Slot.HANDS,
-    drop_chance=13.0,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.RESTO_DRUID:55,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Firemaw","Flamegor","Ebonroc"],
     loot_name="Gauntlets of Ten Storms",
     slot=Slot.HANDS,
-    drop_chance=6.0,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:69,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Shroud of Pure Thought",
-    slot=Slot.BACK,
-    drop_chance=20.0,
-    ep_map={
-        SpecClass.RESTO_SHAMAN:82,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Firemaw","Flamegor","Ebonroc"],
     loot_name="Handguards of Transcendence",
     slot=Slot.HANDS,
-    drop_chance=13.0,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.HOLY_PRIEST:68,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Rejuvenating Gem",
-    slot=Slot.TRINKET,
-    drop_chance=12.0,
-    ep_map={
-        SpecClass.RESTO_DRUID:93,
-        SpecClass.HOLY_PRIEST:98,
-        SpecClass.RESTO_SHAMAN:120,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Firemaw","Flamegor","Ebonroc"],
     loot_name="Dragonstalker's Gauntlets",
     slot=Slot.HANDS,
-    drop_chance=13.0,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.MARKS_HUNTER:84,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Firemaw","Flamegor","Ebonroc"],
     loot_name="Netherwind Gloves",
     slot=Slot.HANDS,
-    drop_chance=15.0,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.FIRE_MAGE:35,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Ring of Blackrock",
-    slot=Slot.FINGER,
-    drop_chance=13.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:51,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Firemaw","Flamegor","Ebonroc"],
     loot_name="Bloodfang Gloves",
     slot=Slot.HANDS,
-    drop_chance=14.0,
+    drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:59,
-    },
-    )
-
-# Ebonroc
-boss_name = "Ebonroc"
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Stormrage Handguards",
-    slot=Slot.HANDS,
-    drop_chance=13.0,
-    ep_map={
-        SpecClass.RESTO_DRUID:55,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Dragonbreath Hand Cannon",
-    slot=Slot.RANGED,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:27,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Handguards of Transcendence",
-    slot=Slot.HANDS,
-    drop_chance=13.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:68,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Rejuvenating Gem",
-    slot=Slot.TRINKET,
-    drop_chance=12.0,
-    ep_map={
-        SpecClass.RESTO_DRUID:93,
-        SpecClass.HOLY_PRIEST:98,
-        SpecClass.RESTO_SHAMAN:120,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Dragonstalker's Gauntlets",
-    slot=Slot.HANDS,
-    drop_chance=13.0,
-    ep_map={
-        SpecClass.MARKS_HUNTER:84,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Netherwind Gloves",
-    slot=Slot.HANDS,
-    drop_chance=15.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:35,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Ring of Blackrock",
-    slot=Slot.FINGER,
-    drop_chance=13.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:51,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Bloodfang Gloves",
-    slot=Slot.HANDS,
-    drop_chance=14.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:59,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Drake Fang Talisman",
-    slot=Slot.TRINKET,
-    drop_chance=18.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:92,
     },
     )
 
 # Chromaggus
 boss_name = "Chromaggus"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Stormrage Pauldrons",
     slot=Slot.SHOULDER,
-    drop_chance=20.14,
+    drop_chance_list=[20.14],
     ep_map={
         SpecClass.RESTO_DRUID:52,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Nemesis Spaulders",
     slot=Slot.SHOULDER,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.ANY_WARLOCK:27,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Empowered Leggings",
     slot=Slot.LEGS,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_DRUID:102,
         SpecClass.HOLY_PRIEST:119,
@@ -2396,56 +2202,66 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Dragonstalker's Spaulders",
     slot=Slot.SHOULDER,
-    drop_chance=22.0,
+    drop_chance_list=[22.0],
     ep_map={
         SpecClass.MARKS_HUNTER:86,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Ashjre'thul, Crossbow of Smiting",
     slot=Slot.RANGED,
-    drop_chance=9.67,
+    drop_chance_list=[9.67],
     ep_map={
         SpecClass.MARKS_HUNTER:1014,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Claw of Chromaggus",
     slot=Slot.MAIN_HAND,
-    drop_chance=9.8,
+    drop_chance_list=[9.8],
     ep_map={
         SpecClass.FIRE_MAGE:67,
         SpecClass.ANY_WARLOCK:69,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
+    loot_name="Angelista's Grasp",
+    slot=Slot.WAIST,
+    drop_chance_list=[19.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:30,
+        SpecClass.ANY_WARLOCK:45,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Pauldrons of Transcendence",
     slot=Slot.SHOULDER,
-    drop_chance=23.0,
+    drop_chance_list=[23.0],
     ep_map={
         SpecClass.HOLY_PRIEST:70,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Chromatically Tempered Sword",
     slot=Slot.MAIN_HAND,
-    drop_chance=9.0,
+    drop_chance_list=[9.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:991,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bloodfang Spaulders",
     slot=Slot.SHOULDER,
-    drop_chance=23.0,
+    drop_chance_list=[23.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:54,
     },
@@ -2454,48 +2270,48 @@ bpc.addLoot(
 # Nefarian
 boss_name = "Nefarian"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Stormrage Chestguard",
     slot=Slot.CHEST,
-    drop_chance=19.75,
+    drop_chance_list=[19.75],
     ep_map={
         SpecClass.RESTO_DRUID:67,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Breastplate of Ten Storms",
     slot=Slot.CHEST,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:60,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Mish'undare, Circlet of the Mind Flayer",
     slot=Slot.HEAD,
-    drop_chance=18.0,
+    drop_chance_list=[18.0],
     ep_map={
         SpecClass.ANY_WARLOCK:67,
         SpecClass.FIRE_MAGE:64,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Staff of the Shadow Flame",
     slot=Slot.TWO_HAND,
-    drop_chance=9.0,
+    drop_chance_list=[9.0],
     ep_map={
         SpecClass.ANY_WARLOCK:117,
         SpecClass.FIRE_MAGE:114,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Lok'amir il Romathis",
     slot=Slot.MAIN_HAND,
-    drop_chance=8.86,
+    drop_chance_list=[8.86],
     ep_map={
         SpecClass.RESTO_DRUID:93,
         SpecClass.RESTO_SHAMAN:106,
@@ -2503,10 +2319,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Pure Elementium Band",
     slot=Slot.FINGER,
-    drop_chance=18.74,
+    drop_chance_list=[18.74],
     ep_map={
         SpecClass.RESTO_DRUID:61,
         SpecClass.HOLY_PRIEST:76,
@@ -2514,85 +2330,86 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Prestor's Talisman of Connivery",
     slot=Slot.NECK,
-    drop_chance=18.94,
+    drop_chance_list=[18.94],
     ep_map={
         SpecClass.MARKS_HUNTER:106,
         SpecClass.COMBAT_ROGUE:75,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Dragonstalker's Breastplate",
     slot=Slot.CHEST,
-    drop_chance=21.71,
+    drop_chance_list=[21.71],
     ep_map={
         SpecClass.MARKS_HUNTER:123,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Master Dragonslayer's Ring",
     slot=Slot.FINGER,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.MARKS_HUNTER:70,
         SpecClass.COMBAT_ROGUE:66,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Ashkandi, Greatsword of the Brotherhood",
     slot=Slot.TWO_HAND,
-    drop_chance=9.11,
+    drop_chance_list=[9.11],
     ep_map={
         SpecClass.MARKS_HUNTER:86,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cloak of the Brood Lord",
     slot=Slot.BACK,
-    drop_chance=18.41,
+    drop_chance_list=[18.41],
     ep_map={
         SpecClass.FIRE_MAGE:31,
         SpecClass.ANY_WARLOCK:32,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Neltharion's Tear",
     slot=Slot.TRINKET,
-    drop_chance=18.25,
+    drop_chance_list=[18.25],
     ep_map={
         SpecClass.FIRE_MAGE:70,
+        SpecClass.ANY_WARLOCK:83,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Robes of Transcendence",
     slot=Slot.CHEST,
-    drop_chance=21.0,
+    drop_chance_list=[21.0],
     ep_map={
         SpecClass.HOLY_PRIEST:107,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bloodfang Chestpiece",
     slot=Slot.CHEST,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:122,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Boots of the Shadow Flame",
     slot=Slot.FEET,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:80,
     },
@@ -2601,33 +2418,42 @@ bpc.addLoot(
 # BWL Trash
 boss_name = "BWL Trash"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Essence Gatherer",
     slot=Slot.RANGED,
-    drop_chance=5.0,
+    drop_chance_list=[5.0],
     ep_map={
         SpecClass.HOLY_PRIEST:26,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Boots of Pure Thought",
     slot=Slot.FEET,
-    drop_chance=5.0,
+    drop_chance_list=[5.0],
     ep_map={
         SpecClass.HOLY_PRIEST:90,
         SpecClass.RESTO_SHAMAN:76,
         SpecClass.RESTO_DRUID:71,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Band of Dark Dominion",
+    slot=Slot.FINGER,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:35,
+    },
+    )
 
 # Jin'do the Hexxer
 boss_name = "Jin'do the Hexxer"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["Jin'do the Hexxer","Bloodlord Mandokir"],
     loot_name="Primal Hakkari Idol",
-    slot=Slot.LEGS_ENCHANT,
-    drop_chance=100.0,
+    slot=Slot.ZG_ENCHANTS,
+    drop_chance_list=[100.0,100.0],
     ep_map={
         SpecClass.RESTO_DRUID:27,
         SpecClass.MARKS_HUNTER:46,
@@ -2639,10 +2465,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Jin'do's Evil Eye",
     slot=Slot.NECK,
-    drop_chance=14.4,
+    drop_chance_list=[14.4],
     ep_map={
         SpecClass.RESTO_DRUID:50,
         SpecClass.HOLY_PRIEST:64,
@@ -2650,29 +2476,30 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Jin'do's Hexxer",
     slot=Slot.MAIN_HAND,
-    drop_chance=14.61,
+    drop_chance_list=[14.61],
     ep_map={
         SpecClass.RESTO_DRUID:64,
         SpecClass.RESTO_SHAMAN:62,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bloodtinged Gloves",
     slot=Slot.HANDS,
-    drop_chance=16.66,
+    drop_chance_list=[16.66],
     ep_map={
         SpecClass.FIRE_MAGE:34,
+        SpecClass.ANY_WARLOCK:41,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Jin'do's Bag of Whammies",
     slot=Slot.OFF_HAND,
-    drop_chance=14.15,
+    drop_chance_list=[14.15],
     ep_map={
         SpecClass.FIRE_MAGE:33,
         SpecClass.ANY_WARLOCK:41,
@@ -2682,10 +2509,10 @@ bpc.addLoot(
 # High Priestess Jeklik
 boss_name = "High Priestess Jeklik"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Primalist's Band",
     slot=Slot.FINGER,
-    drop_chance=19.70,
+    drop_chance_list=[19.7],
     ep_map={
         SpecClass.RESTO_DRUID:21,
         SpecClass.HOLY_PRIEST:52,
@@ -2693,67 +2520,31 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Jeklik's Opaline Talisman",
     slot=Slot.NECK,
-    drop_chance=18.0,
+    drop_chance_list=[18.0],
     ep_map={
         SpecClass.FIRE_MAGE:22,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Band of Servitude",
-    slot=Slot.FINGER,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:25,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Belt of Untapped Power",
-    slot=Slot.WAIST,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:30,
     },
     )
 
 # High Priest Venoxis
 boss_name = "High Priest Venoxis"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Zulian Tigerhide Cloak",
     slot=Slot.BACK,
-    drop_chance=18.41,
+    drop_chance_list=[18.41],
     ep_map={
         SpecClass.MARKS_HUNTER:58,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Band of Servitude",
-    slot=Slot.FINGER,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:25,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Belt of Untapped Power",
-    slot=Slot.WAIST,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:30,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Blooddrenched Footpads",
     slot=Slot.FEET,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:58,
     },
@@ -2761,117 +2552,69 @@ bpc.addLoot(
 
 # High Priest Thekal
 boss_name = "High Priest Thekal"
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Band of Servitude",
-    slot=Slot.FINGER,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:25,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Belt of Untapped Power",
-    slot=Slot.WAIST,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:30,
-    },
-    )
 
 # High Priestess Mar'li
 boss_name = "High Priestess Mar'li"
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Band of Servitude",
-    slot=Slot.FINGER,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:25,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Belt of Untapped Power",
-    slot=Slot.WAIST,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:30,
-    },
-    )
 
 # High Priestess Arlokk
 boss_name = "High Priestess Arlokk"
+
+# Multiple
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["High Priestess Arlokk","High Priestess Mar'li","High Priest Thekal","High Priest Venoxis","High Priestess Jeklik"],
     loot_name="Band of Servitude",
     slot=Slot.FINGER,
-    drop_chance=10.0,
+    drop_chance_list=[10.0,10.0,10.0,10.0,10.0],
     ep_map={
         SpecClass.FIRE_MAGE:25,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["High Priestess Arlokk","High Priestess Mar'li","High Priest Thekal","High Priest Venoxis","High Priestess Jeklik"],
     loot_name="Belt of Untapped Power",
     slot=Slot.WAIST,
-    drop_chance=9.0,
+    drop_chance_list=[9.0,9.0,9.0,9.0,9.0],
     ep_map={
         SpecClass.FIRE_MAGE:30,
+        SpecClass.ANY_WARLOCK:31,
     },
     )
 
 # Bloodlord Mandokir
 boss_name = "Bloodlord Mandokir"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Primal Hakkari Idol",
-    slot=Slot.HEAD_ENCHANT,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.RESTO_DRUID:27,
-        SpecClass.MARKS_HUNTER:46,
-        SpecClass.FIRE_MAGE:31,
-        SpecClass.HOLY_PRIEST:38,
-        SpecClass.COMBAT_ROGUE:28,
-        SpecClass.RESTO_SHAMAN:31,
-        SpecClass.ANY_WARLOCK:18,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Hakkari Loa Cloak",
     slot=Slot.BACK,
-    drop_chance=17.69,
+    drop_chance_list=[17.69],
     ep_map={
         SpecClass.RESTO_DRUID:38,
         SpecClass.RESTO_SHAMAN:40,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Primalist's Seal",
     slot=Slot.FINGER,
-    drop_chance=18.85,
+    drop_chance_list=[18.85],
     ep_map={
         SpecClass.RESTO_DRUID:36,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Mandokir's Sting",
     slot=Slot.RANGED,
-    drop_chance=9.49,
+    drop_chance_list=[9.49],
     ep_map={
         SpecClass.MARKS_HUNTER:816,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Zanzil's Seal",
     slot=Slot.FINGER,
-    drop_chance=18.0,
+    drop_chance_list=[18.0],
     ep_map={
         SpecClass.FIRE_MAGE:26,
     },
@@ -2880,68 +2623,71 @@ bpc.addLoot(
 # Hakkar
 boss_name = "Hakkar"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Zandalarian Hero Charm",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
-        SpecClass.RESTO_DRUID:37,
-        SpecClass.HOLY_PRIEST:37,
-        SpecClass.RESTO_SHAMAN:37,
+        SpecClass.RESTO_DRUID:34,
+        SpecClass.HOLY_PRIEST:34,
+        SpecClass.RESTO_SHAMAN:34,
+        SpecClass.ANY_WARLOCK:17,
+        SpecClass.FIRE_MAGE:17,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Gurubashi Dwarf Destroyer",
     slot=Slot.RANGED,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:30,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Warblade of the Hakkari",
     slot=Slot.MAIN_HAND,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.MARKS_HUNTER:57,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Fang of the Faceless",
     slot=Slot.OFF_HAND,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.MARKS_HUNTER:57,
         SpecClass.COMBAT_ROGUE:842,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cloak of Consumption",
     slot=Slot.BACK,
-    drop_chance=20.0,
+    drop_chance_list=[20.0],
     ep_map={
         SpecClass.FIRE_MAGE:38,
         SpecClass.ANY_WARLOCK:45,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Touch of Chaos",
     slot=Slot.RANGED,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.FIRE_MAGE:18,
+        SpecClass.ANY_WARLOCK:18,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bloodcaller",
     slot=Slot.MAIN_HAND,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.FIRE_MAGE:36,
         SpecClass.ANY_WARLOCK:37,
@@ -2950,32 +2696,14 @@ bpc.addLoot(
 
 # Kurinnaxx
 boss_name = "Kurinnaxx"
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Cloak of Veiled Shadows",
-    slot=Slot.BACK,
-    drop_chance=50.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:52,
-    },
-    )
 
 # General Rajaxx
 boss_name = "General Rajaxx"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Cloak of Veiled Shadows",
-    slot=Slot.BACK,
-    drop_chance=50.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:52,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Boots of the Vanguard",
     slot=Slot.FEET,
-    drop_chance=10.0,
+    drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:66,
     },
@@ -2984,37 +2712,10 @@ bpc.addLoot(
 # Moam
 boss_name = "Moam"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Gavel of Infinite Wisdom",
-    slot=Slot.MAIN_HAND,
-    drop_chance=70.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:117,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=70.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:56,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=70.0,
-    ep_map={
-        SpecClass.ANY_WARLOCK:61,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Talon of Furious Concentration",
     slot=Slot.OFF_HAND,
-    drop_chance=10.0,
+    drop_chance_list=[10.0],
     ep_map={
         SpecClass.FIRE_MAGE:35,
         SpecClass.ANY_WARLOCK:36,
@@ -3023,89 +2724,17 @@ bpc.addLoot(
 
 # Buru the Gorger
 boss_name = "Buru the Gorger"
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Gavel of Infinite Wisdom",
-    slot=Slot.MAIN_HAND,
-    drop_chance=22.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:117,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=22.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:56,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=22.0,
-    ep_map={
-        SpecClass.ANY_WARLOCK:61,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Cloak of Veiled Shadows",
-    slot=Slot.BACK,
-    drop_chance=50.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:52,
-    },
-    )
 
 # Ayamiss the Hunter
 boss_name = "Ayamiss the Hunter"
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Gavel of Infinite Wisdom",
-    slot=Slot.MAIN_HAND,
-    drop_chance=16.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:117,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=16.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:56,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=16.0,
-    ep_map={
-        SpecClass.ANY_WARLOCK:61,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Cloak of Veiled Shadows",
-    slot=Slot.BACK,
-    drop_chance=50.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:52,
-    },
-    )
 
 # Ossirian the Unscarred
 boss_name = "Ossirian the Unscarred"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Amulet of the Shifting Sands",
     slot=Slot.NECK,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:64,
         SpecClass.HOLY_PRIEST:67,
@@ -3113,10 +2742,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Gloves of Dark Wisdom",
     slot=Slot.HANDS,
-    drop_chance=17.0,
+    drop_chance_list=[17.0],
     ep_map={
         SpecClass.RESTO_DRUID:56,
         SpecClass.HOLY_PRIEST:76,
@@ -3124,88 +2753,130 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Gavel of Infinite Wisdom",
-    slot=Slot.MAIN_HAND,
-    drop_chance=64.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:117,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=64.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:56,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blade of Vaulted Secrets",
-    slot=Slot.MAIN_HAND,
-    drop_chance=64.0,
-    ep_map={
-        SpecClass.ANY_WARLOCK:61,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Crossbow of Imminent Doom",
     slot=Slot.RANGED,
-    drop_chance=10.0,
+    drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:37,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Shackles of the Unscarred",
     slot=Slot.WRISTS,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.FIRE_MAGE:23,
         SpecClass.ANY_WARLOCK:24,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Staff of the Ruins",
     slot=Slot.TWO_HAND,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.FIRE_MAGE:90,
         SpecClass.ANY_WARLOCK:99,
     },
     )
 
+# Multiple
+bpc.addLoot(
+    boss_list=["Moam","Buru the Gorger","Ayamiss the Hunter","Ossirian the Unscarred"],
+    loot_name="Gavel of Infinite Wisdom",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[70.0,22.0,16.0,64.0],
+    ep_map={
+        SpecClass.HOLY_PRIEST:117,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Moam","Ossirian the Unscarred","Ayamiss the Hunter","Buru the Gorger"],
+    loot_name="Blade of Vaulted Secrets",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[70.0,64.0,16.0,22.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:56,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Moam","Ossirian the Unscarred","Ayamiss the Hunter","Buru the Gorger"],
+    loot_name="Kris of Unspoken Names",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[70.0,64.0,16.0,22.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:61,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Kurinnaxx","General Rajaxx","Ayamiss the Hunter","Buru the Gorger"],
+    loot_name="Cloak of Veiled Shadows",
+    slot=Slot.BACK,
+    drop_chance_list=[50.0,50.0,50.0,50.0],
+    ep_map={
+        SpecClass.COMBAT_ROGUE:52,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Ossirian the Unscarred","Ayamiss the Hunter","Buru the Gorger","Moam","General Rajaxx","Kurinnaxx"],
+    loot_name="Ring of Unspoken Names",
+    slot=Slot.FINGER,
+    drop_chance_list=[17.0,50.0,50.0,17.0,17.0,17.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:46,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Ossirian the Unscarred","Ayamiss the Hunter","Buru the Gorger","Moam","General Rajaxx","Kurinnaxx"],
+    loot_name="Band of Vaulted Secrets",
+    slot=Slot.FINGER,
+    drop_chance_list=[17.0,50.0,50.0,17.0,17.0,17.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:30,
+    },
+    )
+
+# AQ20 Trash
+boss_name = "AQ20 Trash"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Fury of the Forgotten Swarm",
+    slot=Slot.NECK,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.COMBAT_ROGUE:50,
+        SpecClass.FURY_WARRIOR:56,
+    },
+    )
+
 # The Prophet Skeram
 boss_name = "The Prophet Skeram"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cloak of Concentrated Hatred",
     slot=Slot.BACK,
-    drop_chance=17.0,
+    drop_chance_list=[17.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:61,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Staff of the Qiraji Prophets",
     slot=Slot.TWO_HAND,
-    drop_chance=8.0,
+    drop_chance_list=[8.0],
     ep_map={
         SpecClass.FIRE_MAGE:61,
         SpecClass.ANY_WARLOCK:63,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Leggings of Immersion",
     slot=Slot.LEGS,
-    drop_chance=17.0,
+    drop_chance_list=[17.0],
     ep_map={
         SpecClass.RESTO_DRUID:64,
         SpecClass.RESTO_SHAMAN:101,
@@ -3215,67 +2886,37 @@ bpc.addLoot(
 # Battleguard Sartura
 boss_name = "Battleguard Sartura"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=7.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Creeping Vine Helm",
     slot=Slot.HEAD,
-    drop_chance=16.0,
+    drop_chance_list=[16.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:87,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Silithid Claw",
     slot=Slot.MAIN_HAND,
-    drop_chance=8.0,
+    drop_chance_list=[8.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:938,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Gloves of Enforcement",
     slot=Slot.HANDS,
-    drop_chance=16.0,
+    drop_chance_list=[16.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:87,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=8.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=8.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Sartura's Might",
     slot=Slot.OFF_HAND,
-    drop_chance=9.0,
+    drop_chance_list=[9.0],
     ep_map={
         SpecClass.HOLY_PRIEST:75,
         SpecClass.RESTO_SHAMAN:88,
@@ -3286,153 +2927,87 @@ bpc.addLoot(
 # Vem
 boss_name = "Vem"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=8.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Angelista's Charm",
     slot=Slot.NECK,
-    drop_chance=25.0,
+    drop_chance_list=[25.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:84,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
     },
     )
 
 # Princess Yauj
 boss_name = "Princess Yauj"
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=16.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=15.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=15.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
-    },
-    )
 
 # Lord Kri
 boss_name = "Lord Kri"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Vest of Swift Execution",
     slot=Slot.CHEST,
-    drop_chance=27.0,
+    drop_chance_list=[27.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:101,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=18.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Ring of the Devoured",
     slot=Slot.FINGER,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.HOLY_PRIEST:58,
         SpecClass.RESTO_SHAMAN:79,
         SpecClass.RESTO_DRUID:43,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Wand of Qiraji Nobility",
+    slot=Slot.RANGED,
+    drop_chance_list=[14.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:19,
+        SpecClass.ANY_WARLOCK:19,
+    },
+    )
 
 # Fankriss the Unyielding
 boss_name = "Fankriss the Unyielding"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Barbed Choker",
     slot=Slot.NECK,
-    drop_chance=15.0,
+    drop_chance_list=[15.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:67,
+        SpecClass.FURY_WARRIOR:64,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Mantle of Wicked Revenge",
     slot=Slot.NECK,
-    drop_chance=23.0,
+    drop_chance_list=[17.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:75,
+        SpecClass.COMBAT_ROGUE:62,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Ancient Qiraji Ripper",
     slot=Slot.MAIN_HAND,
-    drop_chance=10.0,
+    drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:1001,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=8.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Robes of the Guardian Saint",
     slot=Slot.CHEST,
-    drop_chance=19.0,
+    drop_chance_list=[19.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:138,
         SpecClass.RESTO_DRUID:98,
@@ -3440,188 +3015,53 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Totem of Life",
     slot=Slot.RANGED,
-    drop_chance=7.0,
+    drop_chance_list=[7.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:30,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=7.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=7.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
     },
     )
 
 # Viscidus
 boss_name = "Viscidus"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Deathdealer's Spaulders",
-    slot=Slot.SHOULDER,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:89,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=21.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Ring of the Qiraji Fury",
     slot=Slot.FINGER,
-    drop_chance=13.0,
+    drop_chance_list=[13.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:63,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Sharpened Silithid Femur",
     slot=Slot.MAIN_HAND,
-    drop_chance=14.0,
+    drop_chance_list=[14.0],
     ep_map={
         SpecClass.FIRE_MAGE:86,
         SpecClass.ANY_WARLOCK:87,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Doomcaller's Mantle",
-    slot=Slot.SHOULDER,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.ANY_WARLOCK:51,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Enigma Shoulderpads",
-    slot=Slot.SHOULDER,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:32,
     },
     )
 
 # Princess Huhuran
 boss_name = "Princess Huhuran"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Deathdealer's Spaulders",
-    slot=Slot.SHOULDER,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:89,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Doomcaller's Mantle",
-    slot=Slot.SHOULDER,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.ANY_WARLOCK:51,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Enigma Shoulderpads",
-    slot=Slot.SHOULDER,
-    drop_chance=100.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:32,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=8.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Huhuran's Stinger",
     slot=Slot.RANGED,
-    drop_chance=8.0,
+    drop_chance_list=[8.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:34,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Gloves of the Messiah",
     slot=Slot.HANDS,
-    drop_chance=18.0,
+    drop_chance_list=[18.0],
     ep_map={
         SpecClass.HOLY_PRIEST:81,
         SpecClass.RESTO_SHAMAN:106,
@@ -3629,10 +3069,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Ring of the Martyr",
     slot=Slot.FINGER,
-    drop_chance=17.0,
+    drop_chance_list=[17.0],
     ep_map={
         SpecClass.HOLY_PRIEST:69,
         SpecClass.RESTO_SHAMAN:81,
@@ -3643,183 +3083,133 @@ bpc.addLoot(
 # Twin Emperors
 boss_name = "Twin Emperors"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Deathdealer's Helm",
     slot=Slot.HEAD,
-    drop_chance=80.0,
+    drop_chance_list=[80.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:124,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Doomcaller's Circlet",
     slot=Slot.HEAD,
-    drop_chance=80.0,
+    drop_chance_list=[80.0],
     ep_map={
         SpecClass.ANY_WARLOCK:72,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Enigma Circlet",
     slot=Slot.HEAD,
-    drop_chance=80.0,
+    drop_chance_list=[80.0],
     ep_map={
         SpecClass.FIRE_MAGE:77,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Amulet of Vek'nilash",
     slot=Slot.NECK,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.ANY_WARLOCK:41,
         SpecClass.FIRE_MAGE:40,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Qiraji Execution Bracers",
     slot=Slot.WRISTS,
-    drop_chance=15.0,
+    drop_chance_list=[15.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:65,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=8.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Gloves of the Hidden Temple",
     slot=Slot.HANDS,
-    drop_chance=14.0,
+    drop_chance_list=[14.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:60,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Bracelets of Royal Redemptione",
     slot=Slot.WRISTS,
-    drop_chance=14.0,
+    drop_chance_list=[14.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:65,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=9.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Royal Scepter of Vek'lor",
     slot=Slot.OFF_HAND,
-    drop_chance=10.0,
+    drop_chance_list=[10.0],
     ep_map={
         SpecClass.FIRE_MAGE:47,
         SpecClass.ANY_WARLOCK:55,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Boots of Epiphany",
+    slot=Slot.FEET,
+    drop_chance_list=[14.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:38,
+        SpecClass.ANY_WARLOCK:39,
     },
     )
 
 # Ouro
 boss_name = "Ouro"
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Pugio",
-    slot=Slot.OFF_HAND,
-    drop_chance=8.0,
-    ep_map={
-        SpecClass.COMBAT_ROGUE:992,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Larvae of the Great Worm",
     slot=Slot.RANGED,
-    drop_chance=15.0,
+    drop_chance_list=[15.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:41,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Deathdealer's Leggings",
     slot=Slot.LEGS,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:115,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Don Rigoberto's Lost Hat",
     slot=Slot.HEAD,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:159,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Augur Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.HOLY_PRIEST:223,
-        SpecClass.RESTO_SHAMAN:262,
-        SpecClass.RESTO_DRUID:195,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
-    loot_name="Blessed Qiraji Acolyte Staff",
-    slot=Slot.TWO_HAND,
-    drop_chance=10.0,
-    ep_map={
-        SpecClass.FIRE_MAGE:121,
-        SpecClass.ANY_WARLOCK:137,
-    },
-    )
-bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Wormscale Blocker",
     slot=Slot.OFF_HAND,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:87,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Burrower Bracers",
     slot=Slot.WRISTS,
-    drop_chance=16.0,
+    drop_chance_list=[16.0],
     ep_map={
         SpecClass.FIRE_MAGE:31,
         SpecClass.ANY_WARLOCK:32,
@@ -3829,64 +3219,64 @@ bpc.addLoot(
 # C'Thun
 boss_name = "C'Thun"
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cloak of the Fallen God",
     slot=Slot.BACK,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:62,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cloak of Clarity",
     slot=Slot.BACK,
-    drop_chance=32.0,
+    drop_chance_list=[32.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:102,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Deathdealer's Vest",
     slot=Slot.CHEST,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:132,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Amulet of the Fallen God",
     slot=Slot.NECK,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:93,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Death's Sting",
     slot=Slot.OFF_HAND,
-    drop_chance=8.0,
+    drop_chance_list=[8.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:1058,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Belt of Never-ending Agony",
     slot=Slot.WAIST,
-    drop_chance=17.0,
+    drop_chance_list=[17.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:105,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Scepter of the False Prophet",
     slot=Slot.MAIN_HAND,
-    drop_chance=6.0,
+    drop_chance_list=[6.0],
     ep_map={
         SpecClass.HOLY_PRIEST:220,
         SpecClass.RESTO_SHAMAN:228,
@@ -3894,10 +3284,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Grasp of the Old God",
     slot=Slot.WAIST,
-    drop_chance=16.0,
+    drop_chance_list=[16.0],
     ep_map={
         SpecClass.HOLY_PRIEST:106,
         SpecClass.RESTO_SHAMAN:124,
@@ -3905,22 +3295,154 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=[boss_name],
     loot_name="Cloak of the Devoured",
     slot=Slot.BACK,
-    drop_chance=12.0,
+    drop_chance_list=[12.0],
     ep_map={
         SpecClass.FIRE_MAGE:45,
         SpecClass.ANY_WARLOCK:52,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Eyestalk Waist Cord",
+    slot=Slot.WAIST,
+    drop_chance_list=[30.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:55,
+        SpecClass.ANY_WARLOCK:56,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Dark Storm Gauntlets",
+    slot=Slot.HANDS,
+    drop_chance_list=[22.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:53,
+        SpecClass.ANY_WARLOCK:61,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Ring of the Fallen God",
+    slot=Slot.FINGER,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:51,
+        SpecClass.ANY_WARLOCK:58,
+    },
+    )
+
+# AQ40 Trash
+boss_name = "AQ40 Trash"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Ritssyn's Ring of Chaos",
+    slot=Slot.FINGER,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:37,
+        SpecClass.ANY_WARLOCK:38,
+    },
+    )
+
+# Multiple
+# Imperial Qiraji Regalia
+bpc.addLoot(
+    boss_list=["Battleguard Sartura","Vem","Princess Yauj","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
+    loot_name="Blessed Qiraji Augur Staff",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[8.0,9.0,15.0,7.0,10.0,9.0,8.0,10.0],
+    ep_map={
+        SpecClass.HOLY_PRIEST:223,
+        SpecClass.RESTO_SHAMAN:262,
+        SpecClass.RESTO_DRUID:195,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Battleguard Sartura","Vem","Princess Yauj","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
+    loot_name="Blessed Qiraji Acolyte Staff",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[8.0,9.0,15.0,7.0,10.0,9.0,8.0,10.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:121,
+        SpecClass.ANY_WARLOCK:137,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Battleguard Sartura","Vem","Princess Yauj","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
+    loot_name="Blessed Qiraji War Hammer",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[8.0,9.0,15.0,7.0,10.0,9.0,8.0,10.0],
+    ep_map={
+        SpecClass.FERAL_DRUID:368,
+    },
+    )
+# Imperial Qiraji Armaments
+bpc.addLoot(
+    boss_list=["Battleguard Sartura","Vem","Princess Yauj","Lord Kri","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
+    loot_name="Blessed Qiraji Pugio",
+    slot=Slot.OFF_HAND,
+    drop_chance_list=[7.0,8.0,16.0,18.0,8.0,21.0,8.0,8.0,8.0],
+    ep_map={
+        SpecClass.COMBAT_ROGUE:992,
+    },
+    )
+# Qiraji Bindings of Command and Qiraji Bindings of Dominance
+bpc.addLoot(
+    boss_list=["Viscidus","Princess Huhuran"],
+    loot_name="Deathdealer's Spaulders",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[100.0,100.0],
+    ep_map={
+        SpecClass.COMBAT_ROGUE:89,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Viscidus","Princess Huhuran"],
+    loot_name="Conqueror's Spaulders",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[100.0,100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:76,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Viscidus","Princess Huhuran"],
+    loot_name="Doomcaller's Mantle",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[100.0,100.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:51,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Viscidus","Princess Huhuran"],
+    loot_name="Enigma Shoulderpads",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[100.0,100.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:32,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Viscidus","Princess Huhuran"],
+    loot_name="Enigma Boots",
+    slot=Slot.FEET,
+    drop_chance_list=[100.0,100.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:44,
+    },
+    )
 
 # None
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Royal Seal of Eldre'Thalas",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:44,
         SpecClass.MARKS_HUNTER:48,
@@ -3928,10 +3450,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Hide of the Wild",
     slot=Slot.BACK,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:45,
         SpecClass.HOLY_PRIEST:54,
@@ -3939,29 +3461,29 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Idol of the Moon",
     slot=Slot.RANGED,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:1,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Robes of the Exalted",
     slot=Slot.CHEST,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:75,
         SpecClass.RESTO_SHAMAN:74,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Fordring's Seal",
     slot=Slot.FINGER,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:39,
         SpecClass.HOLY_PRIEST:43,
@@ -3969,10 +3491,10 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Lei of the Lifegiver",
     slot=Slot.OFF_HAND,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:62,
         SpecClass.HOLY_PRIEST:64,
@@ -3980,250 +3502,309 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Verdant Footpads",
     slot=Slot.FEET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:37,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Corehound Belt",
     slot=Slot.WAIST,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:67,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Devilsaur Eye",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.MARKS_HUNTER:32,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Blackhand's Breadth",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.MARKS_HUNTER:57,
         SpecClass.COMBAT_ROGUE:46
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Don Julio's Band",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.MARKS_HUNTER:67,
         SpecClass.COMBAT_ROGUE:57,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Cape of the Black Baron",
     slot=Slot.BACK,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.MARKS_HUNTER:62,
         SpecClass.COMBAT_ROGUE:49,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Bloodvine Vest",
     slot=Slot.CHEST,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:56,
+        SpecClass.ANY_WARLOCK:70,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Bloodvine Leggings",
     slot=Slot.LEGS,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:51,
+        SpecClass.ANY_WARLOCK:58,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Bloodvine Boots",
     slot=Slot.FEET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:35,
+        SpecClass.ANY_WARLOCK:43,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Band of Rumination",
     slot=Slot.FINGER,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:12,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Wand of Biting Cold",
     slot=Slot.RANGED,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:0,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Champion's Silk Cowl",
     slot=Slot.HEAD,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:37,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Champion's Silk Mantle",
     slot=Slot.SHOULDER,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:29,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Eye of the Beast",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:24,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Tome of Fiery Arcana",
     slot=Slot.OFF_HAND,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:40,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Tome of Shadow Force",
     slot=Slot.OFF_HAND,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.ANY_WARLOCK:34,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Darkmoon Card: Blue Dragon",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.HOLY_PRIEST:56,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Animated Chain Necklace",
     slot=Slot.NECK,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_DRUID:36,
         SpecClass.HOLY_PRIEST:40,
     },
     )
 bpc.addLoot(
-    boss=None,
+    boss_list=["CURRENT"],
     loot_name="Glowstar Rod of Healing",
     slot=Slot.RANGED,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.HOLY_PRIEST:18,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
+    loot_name="Wizard's Hand of Wrath",
+    slot=Slot.RANGED,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:10,
+        SpecClass.ANY_WARLOCK:10,
+    },
+    )   
+bpc.addLoot(
+    boss_list=["CURRENT"],
     loot_name="Satyr's Bow",
     slot=Slot.RANGED,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:24,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
     loot_name="Seal of the Gurubashi Berserker",
     slot=Slot.FINGER,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:40,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
     loot_name="Hand of Justice",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:50,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
     loot_name="Mindtap Talisman",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:66,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
     loot_name="Briarwood Reed",
     slot=Slot.TRINKET,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:29,
+        SpecClass.ANY_WARLOCK:29,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
     loot_name="Stormrager",
     slot=Slot.RANGED,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:1,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
     loot_name="Bonecreeper Stylus",
     slot=Slot.RANGED,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.FIRE_MAGE:12,
     },
     )
 bpc.addLoot(
-    boss=boss_name,
+    boss_list=["CURRENT"],
     loot_name="Zandalar Madcap's Tunic",
     slot=Slot.CHEST,
-    drop_chance=100.0,
+    drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:90,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Felcloth Gloves",
+    slot=Slot.HANDS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:33,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Skul's Ghastly Touch",
+    slot=Slot.RANGED,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.ANY_WARLOCK:14,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Lionheart Helm",
+    slot=Slot.HEAD,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:116,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Abyssal Plate Legplates of Striking",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:65,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Eldritch Reinforced Legplate",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:59,
     },
     )
 
