@@ -2,13 +2,15 @@ from enum import IntEnum
 import collections
 import matplotlib.pyplot as plt
 import numpy as np
+import math
 
 verbose = True
+SCORE_SF = 100
 
 class SpecClass(IntEnum):
     NONE = 0
     RESTO_DRUID = 1
-    FERAL_DRUID = 2
+    FERAL_TANK_DRUID = 2
     MARKS_HUNTER = 3
     FIRE_MAGE = 4
     HOLY_PALADIN = 5
@@ -100,11 +102,12 @@ class Boss:
     def __init__(self,name,raid,clear_time):
         self.name = name # boss name
         self.raid = raid # Raid enum
-        self.clear_time = clear_time # minutes to clear boss from start of dungeon
+        self.clear_time = clear_time # minutes to clear boss from previous boss
         self.loot_table = [] # array of names of items dropped by this boss
         self.loot_drop_chance = {} # map from loot name to drop chance of the item in %
         self.enu = {} # expected normalized upgrade for a raid from this boss (map from character name to enu)
-        self.mean_enupm = 0 # mean expected normalized upgrade per minute minute for boss
+        self.mean_enu = 0 # mean expected normalized upgrade for boss
+        self.mean_enupm = 0 # mean_enu per minute (marginal time)
 
 class BossPrioCalc:
 
@@ -114,7 +117,7 @@ class BossPrioCalc:
         self.raid = {} # map of character names to Character object 
         self.ep_bis = { # map from SpecClass enum to BiS ep possible in P6 for that SpecClass
             SpecClass.RESTO_DRUID:1685,
-            SpecClass.FERAL_DRUID:3586,
+            SpecClass.FERAL_TANK_DRUID:3586,
             SpecClass.MARKS_HUNTER:3267,
             SpecClass.FIRE_MAGE:1149,
             SpecClass.HOLY_PALADIN:0,
@@ -164,24 +167,50 @@ class BossPrioCalc:
 
         self.raid[name] = Character(name,spec_class,head,neck,shoulder,chest,waist,legs,feet,wrist,hands,fingers,trinkets,back,mh,oh,th,ranged,zg_enchants)
     
-    def _getCharBiS(self,char_name,spec_class,slot):
-        # returns the BiS item for given slot that player has
-        ep = 0
-        item_name_print = "NONE"
+    def _checkCharHas(self,char_name,spec_class,slot,item_name_trgt):
+        # checks if character has the given item
         if slot == Slot.ZG_ENCHANTS:
-            item_name = "Primal Hakkari Idol"
-            item_name_print = item_name
-            ep = self.loot_db[item_name].ep_map[spec_class]
+            return(False)
+
+        for item_name in self.raid[char_name].gear[slot]:
+                if item_name == item_name_trgt:
+                    return(True)
+
+        return(False)
+    
+    def _getCharCurrent(self,char_name,spec_class,slot):
+        # returns the current item for given slot that player has
+        
+        if slot == Slot.ZG_ENCHANTS:
+            item_name_print = "Primal Hakkari Idol"
+            ep = self.loot_db[item_name_print].ep_map[spec_class]
+        elif slot == Slot.FINGER or slot == Slot.TRINKET:
+            # get min ep (replace worst of the two)
+            ep = math.inf
+            item_name_print = "NONE"
+            for item_name in self.raid[char_name].gear[slot]:
+                if self.loot_db[item_name].ep_map[spec_class] <= ep:
+                    ep = self.loot_db[item_name].ep_map[spec_class]
+                    item_name_print = item_name
         else:
+            # get max ep
+            ep = 0
+            item_name_print = "NONE"
             for item_name in self.raid[char_name].gear[slot]:
                 if self.loot_db[item_name].ep_map[spec_class] >= ep:
                     ep = self.loot_db[item_name].ep_map[spec_class]
                     item_name_print = item_name
+
+        if ep == 0 and item_name_print != "NONE" and slot != slot.ZG_ENCHANTS:
+            print("item_name_print: {}, char_name: {}".format(item_name_print,char_name))
+            raise RuntimeError("Current EP should not be 0 for item ")
+
         return(item_name_print,ep)
 
     def calc(self):
         # calculate metrics and plot
         for boss_name in self.bosses:
+            self.bosses[boss_name].mean_enu = 0.0
             self.bosses[boss_name].mean_enupm = 0.0
             for char_name in self.raid:
                 spec_class = self.raid[char_name].spec_class
@@ -192,9 +221,16 @@ class BossPrioCalc:
                     loot_new = self.loot_db[loot_name]
                     slot = loot_new.slot
                     drop_chance = self.bosses[boss_name].loot_drop_chance[loot_name]/100.0 # convert to fraction
+
+                    # check if character already has the item
+                    if self._checkCharHas(char_name,spec_class,slot,loot_name):
+                        print("{}: {} already has {}".format(boss_name,char_name,loot_name))
+                        continue
+
+                    # get current item
                     item_new_print = loot_name
                     ep_new = self.loot_db[loot_name].ep_map[spec_class]
-                    item_current_print , ep_current = self._getCharBiS(char_name,spec_class,slot)
+                    item_current_print , ep_current = self._getCharCurrent(char_name,spec_class,slot)
 
                     # handle special cases
                     if slot == Slot.ZG_ENCHANTS:
@@ -208,9 +244,9 @@ class BossPrioCalc:
                         
                     elif slot == Slot.MAIN_HAND or slot == Slot.OFF_HAND or slot == Slot.TWO_HAND:
                         # get current items / ep values for weapons
-                        item_name_mh_curr , ep_mh_curr = self._getCharBiS(char_name,spec_class,Slot.MAIN_HAND)
-                        item_name_oh_curr , ep_oh_curr = self._getCharBiS(char_name,spec_class,Slot.OFF_HAND)
-                        item_name_2h_curr , ep_2h_curr = self._getCharBiS(char_name,spec_class,Slot.TWO_HAND)
+                        item_name_mh_curr , ep_mh_curr = self._getCharCurrent(char_name,spec_class,Slot.MAIN_HAND)
+                        item_name_oh_curr , ep_oh_curr = self._getCharCurrent(char_name,spec_class,Slot.OFF_HAND)
+                        item_name_2h_curr , ep_2h_curr = self._getCharCurrent(char_name,spec_class,Slot.TWO_HAND)
                         # determine best current
                         if (ep_mh_curr + ep_oh_curr) >= ep_2h_curr:
                             ep_current = ep_mh_curr + ep_oh_curr
@@ -228,18 +264,17 @@ class BossPrioCalc:
 
                     # calculate ep upgrade
                     if ep_new > ep_current:
-                        self.bosses[boss_name].enu[char_name] += ((ep_new - ep_current)*drop_chance)/self.ep_bis[spec_class]
+                        enu = SCORE_SF*((ep_new - ep_current)*drop_chance)/self.ep_bis[spec_class] # expected normallized upgrade
+                        self.bosses[boss_name].enu[char_name] += enu
                         if verbose:
-                            print("{}: {} ({}) is a {} slot upgrade over {} ({}) for {}".format(boss_name,item_new_print,ep_new,slot.name,item_current_print,ep_current,char_name))
-                    
-                    if ep_current == 0 and item_current_print != "NONE" and slot != slot.ZG_ENCHANTS:
-                        print("boss_name: {}, item_current_print: {}, char_name: {}".format(boss_name,item_current_print,char_name))
-                        raise RuntimeError("Current EP should not be 0 for item ")
+                            print("{}: {} ({}) is a {} slot upgrade over {} ({}) for {}, enu: {:0.2f}".format(boss_name,item_new_print,ep_new,slot.name,item_current_print,ep_current,char_name,enu))
+            
+                # Loot loop done, sum character mean enu 
+                self.bosses[boss_name].mean_enu += self.bosses[boss_name].enu[char_name]
 
-
-                self.bosses[boss_name].mean_enupm += self.bosses[boss_name].enu[char_name]
-
-            self.bosses[boss_name].mean_enupm /= len(self.raid)
+            # Character loop done, calculate average enu for whole raid
+            self.bosses[boss_name].mean_enu /= len(self.raid)
+            self.bosses[boss_name].mean_enupm = self.bosses[boss_name].mean_enu/self.bosses[boss_name].clear_time
         
         # define raid color formatting
         raid_color_format = {
@@ -259,9 +294,10 @@ class BossPrioCalc:
             boss_list = RaidToBossMap[raid]
             color_format = raid_color_format[raid]
             # construct temp ordered dictionary
+            # also calculate cumulative mean_enu per minute
             d = collections.OrderedDict()
             for boss_name in boss_list:
-                 d[boss_name] = self.bosses[boss_name].mean_enupm
+                d[boss_name] = self.bosses[boss_name].mean_enupm
 
             # plot given raid
             plt_range = np.arange(idx,idx+len(d))
@@ -272,6 +308,9 @@ class BossPrioCalc:
         
         # format
         # plt.xticks(rotation=90)
+        plt.title("Raid Upgrade per Boss")
+        plt.xlabel("Normalized Expected Mean Raid Upgrade per Minute")
+        plt.ylabel("Boss")
         plt.grid(axis='x')
         plt.yticks(ticks=y_ticks,labels=y_labels)
         plt.show()
@@ -293,52 +332,52 @@ MC_clear_time = 75
 bpc.addBoss(
     name="Lucifron",
     raid=Raid.MC,
-    clear_time=1*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Magmadar",
     raid=Raid.MC,
-    clear_time=2*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Gehennas",
     raid=Raid.MC,
-    clear_time=3*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Garr",
     raid=Raid.MC,
-    clear_time=4*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Baron Geddon",
     raid=Raid.MC,
-    clear_time=5*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Shazzrah",
     raid=Raid.MC,
-    clear_time=6*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Golemagg the Incinerator",
     raid=Raid.MC,
-    clear_time=7*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Sulfuron Harbinger",
     raid=Raid.MC,
-    clear_time=8*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Majordomo Executus",
     raid=Raid.MC,
-    clear_time=9*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="Ragnaros",
     raid=Raid.MC,
-    clear_time=10*MC_clear_time/10,
+    clear_time=MC_clear_time/10,
     )
 bpc.addBoss(
     name="MC Trash",
@@ -350,42 +389,42 @@ BWL_clear_time = 60
 bpc.addBoss(
     name="Razorgore the Untamed",
     raid=Raid.BWL,
-    clear_time=1*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="Vaelastrasz the Corrupt",
     raid=Raid.BWL,
-    clear_time=2*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="Broodlord Lashlayer",
     raid=Raid.BWL,
-    clear_time=3*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="Firemaw",
     raid=Raid.BWL,
-    clear_time=4*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="Flamegor",
     raid=Raid.BWL,
-    clear_time=5*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="Ebonroc",
     raid=Raid.BWL,
-    clear_time=6*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="Chromaggus",
     raid=Raid.BWL,
-    clear_time=7*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="Nefarian",
     raid=Raid.BWL,
-    clear_time=8*BWL_clear_time/8,
+    clear_time=BWL_clear_time/8,
     )
 bpc.addBoss(
     name="BWL Trash",
@@ -397,84 +436,84 @@ ZG_clear_time = 90
 bpc.addBoss(
     name="Jin'do the Hexxer",
     raid=Raid.ZG,
-    clear_time=1*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="High Priest Thekal",
     raid=Raid.ZG,
-    clear_time=2*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="Bloodlord Mandokir",
     raid=Raid.ZG,
-    clear_time=3*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="High Priestess Mar'li",
     raid=Raid.ZG,
-    clear_time=4*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="High Priest Venoxis",
     raid=Raid.ZG,
-    clear_time=5*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="High Priestess Jeklik",
     raid=Raid.ZG,
-    clear_time=6*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="Edge of Madness",
     raid=Raid.ZG,
-    clear_time=7*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="High Priestess Arlokk",
     raid=Raid.ZG,
-    clear_time=8*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="Hakkar",
     raid=Raid.ZG,
-    clear_time=9*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 bpc.addBoss(
     name="Gahz'ranka",
     raid=Raid.ZG,
-    clear_time=10*ZG_clear_time/10,
+    clear_time=ZG_clear_time/10,
     )
 # AQ20
 AQ20_clear_time = 90
 bpc.addBoss(
     name="Kurinnaxx",
     raid=Raid.AQ20,
-    clear_time=1*AQ20_clear_time/6,
+    clear_time=AQ20_clear_time/6,
     )
 bpc.addBoss(
     name="General Rajaxx",
     raid=Raid.AQ20,
-    clear_time=2*AQ20_clear_time/6,
+    clear_time=AQ20_clear_time/6,
     )
 bpc.addBoss(
     name="Moam",
     raid=Raid.AQ20,
-    clear_time=3*AQ20_clear_time/6,
+    clear_time=AQ20_clear_time/6,
     )
 bpc.addBoss(
     name="Buru the Gorger",
     raid=Raid.AQ20,
-    clear_time=4*AQ20_clear_time/6,
+    clear_time=AQ20_clear_time/6,
     )
 bpc.addBoss(
     name="Ayamiss the Hunter",
     raid=Raid.AQ20,
-    clear_time=5*AQ20_clear_time/6,
+    clear_time=AQ20_clear_time/6,
     )
 bpc.addBoss(
     name="Ossirian the Unscarred",
     raid=Raid.AQ20,
-    clear_time=6*AQ20_clear_time/6,
+    clear_time=AQ20_clear_time/6,
     )
 bpc.addBoss(
     name="AQ20 Trash",
@@ -487,57 +526,57 @@ AQ40_clear_time = 240
 bpc.addBoss(
     name="The Prophet Skeram",
     raid=Raid.AQ40,
-    clear_time=1*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Lord Kri",
     raid=Raid.AQ40,
-    clear_time=2*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Princess Yauj",
     raid=Raid.AQ40,
-    clear_time=2*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Vem",
     raid=Raid.AQ40,
-    clear_time=2*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Battleguard Sartura",
     raid=Raid.AQ40,
-    clear_time=3*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Fankriss the Unyielding",
     raid=Raid.AQ40,
-    clear_time=4*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Viscidus",
     raid=Raid.AQ40,
-    clear_time=5*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Princess Huhuran",
     raid=Raid.AQ40,
-    clear_time=6*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Twin Emperors",
     raid=Raid.AQ40,
-    clear_time=7*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="Ouro",
     raid=Raid.AQ40,
-    clear_time=8*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="C'Thun",
     raid=Raid.AQ40,
-    clear_time=9*AQ40_clear_time/9,
+    clear_time=AQ40_clear_time/9,
     )
 bpc.addBoss(
     name="AQ40 Trash",
@@ -1016,217 +1055,217 @@ bpc.addChar(
     zg_enchants=2,
     )
 # DPS Warrior
-# bpc.addChar(
-#     name="Akecheta",
-#     spec_class=SpecClass.FURY_WARRIOR,
-#     head=["Lionheart Helm"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Drake Talon Pauldrons"],
-#     chest=["Malfurion's Blessed Bulwark"],
-#     waist=["Onslaught Girdle"],
-#     legs=["Abyssal Plate Legplates of Striking"],
-#     feet=["Chromatic Boots"],
-#     wrist=["Wristguards of Stability"],
-#     hands=["Edgemaster's Handguards"],
-#     fingers=["Quick Strike Ring","Seal of the Gurubashi Berserker"],
-#     trinkets=["Hand of Justice","Drake Fang Talisman"],
-#     back=["Might of the Tribe"],
-#     mh=["Crul'shorukh, Edge of Chaos"],
-#     oh=["Brutality Blade"],
-#     th=[],
-#     ranged=["Striker's Mark"],
-#     zg_enchants=0,
-#     )
-# bpc.addChar(
-#     name="Flatzz",
-#     spec_class=SpecClass.FURY_WARRIOR,
-#     head=["Lionheart Helm"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Drake Talon Pauldrons"],
-#     chest=["Savage Gladiator Chain"],
-#     waist=["Zandalar Vindicator's Belt"],
-#     legs=["Eldritch Reinforced Legplates"],
-#     feet=["Chromatic Boots"],
-#     wrist=["Zandalar Vindicator's Armguards"],
-#     hands=["Edgemaster's Handguards"],
-#     fingers=["Quick Strike Ring","Don Julio's Band"],
-#     trinkets=["Hand of Justice","Blackhand's Breadth"],
-#     back=["Cloak of Draconic Might"],
-#     mh=["Deathbringer"],
-#     oh=["Core Hound Tooth"],
-#     th=[],
-#     ranged=["Striker's Mark"],
-#     zg_enchants=0,
-#     )
-# bpc.addChar(
-#     name="Chango",
-#     spec_class=SpecClass.FURY_WARRIOR,
-#     head=["Lionheart Helm"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Drake Talon Pauldrons"],
-#     chest=["Savage Gladiator Chain"],
-#     waist=["Onslaught Girdle"],
-#     legs=["Legionnaire's Plate Leggings"],
-#     feet=["Chromatic Boots"],
-#     wrist=["Zandalar Vindicator's Armguards"],
-#     hands=["Flameguard Gauntlets"],
-#     fingers=["Quick Strike Ring","Don Julio's Band"],
-#     trinkets=["Hand of Justice","Drake Fang Talisman"],
-#     back=["Cape of the Black Baron"],
-#     mh=["Crul'shorukh, Edge of Chaos"],
-#     oh=["Doom's Edge"],
-#     th=[],
-#     ranged=["Blastershot Launcher"],
-#     zg_enchants=0,
-#     )
-# bpc.addChar(
-#     name="Dohvyk",
-#     spec_class=SpecClass.FURY_WARRIOR,
-#     head=["Lionheart Helm"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Drake Talon Pauldrons"],
-#     chest=["Savage Gladiator Chain"],
-#     waist=["Zandalar Vindicator's Belt"],
-#     legs=["Bloodsoaked Legplates"],
-#     feet=["Boots of the Shadow Flame"],
-#     wrist=["Battleborn Armbraces"],
-#     hands=["Flameguard Gauntlets"],
-#     fingers=["Quick Strike Ring","Master Dragonslayer's Ring"],
-#     trinkets=["Hand of Justice","Blackhand's Breadth"],
-#     back=["Zulian Tigerhide Cloak"],
-#     mh=[],
-#     oh=[],
-#     th=["Bonereaver's Edge"],
-#     ranged=["Satyr's Bow"],
-#     zg_enchants=0,
-#     )
-# bpc.addChar(
-#     name="Furckinstein",
-#     spec_class=SpecClass.FURY_WARRIOR,
-#     head=["Crown of Destruction"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Champion's Plate Shoulders"],
-#     chest=["Runed Bloodstained Hauberk"],
-#     waist=["Mugger's Belt"],
-#     legs=["Legionnaire's Plate Leggings"],
-#     feet=["Bloodmail Boots"],
-#     wrist=["Zandalar Vindicator's Armguards"],
-#     hands=["Sacrificial Gauntlets"],
-#     fingers=["Quick Strike Ring","Don Julio's Band"],
-#     trinkets=["Drake Fang Talisman","Blackhand's Breadth"],
-#     back=["Cloak of Firemaw"],
-#     mh=["Gutgore Ripper"],
-#     oh=["Bonescraper"],
-#     th=[],
-#     ranged=["Gurubashi Dwarf Destroyer"],
-#     zg_enchants=0,
-#     )
-# bpc.addChar(
-#     name="Dirty",
-#     spec_class=SpecClass.FURY_WARRIOR,
-#     head=["Lionheart Helm"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Black Dragonscale Shoulders"],
-#     chest=["Black Dragonscale Breastplate"],
-#     waist=["Zandalar Vindicator's Belt"],
-#     legs=["Black Dragonscale Leggings"],
-#     feet=["Black Dragonscale Boots"],
-#     wrist=["Zandalar Vindicator's Armguards"],
-#     hands=["Flameguard Gauntlets"],
-#     fingers=["Quick Strike Ring","Don Julio's Band"],
-#     trinkets=["Blackhand's Breadth","Diamond Flask"],
-#     back=["Zulian Tigerhide Cloak"],
-#     mh=["Warblade of the Hakkari"],
-#     oh=["Warblade of the Hakkari"],
-#     th=[],
-#     ranged=["Blastershot Launcher"],
-#     zg_enchants=0,
-#     )
-# # Tank
-# bpc.addChar(
-#     name="Crox",
-#     spec_class=SpecClass.PROT_THREAT_WARRIOR,
-#     head=["Helm of Endless Rage"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Drake Talon Pauldrons"],
-#     chest=["Savage Gladiator Chain"],
-#     waist=["Zandalar Vindicator's Belt"],
-#     legs=["Legplates of Wrath"],
-#     feet=["Core Forged Greaves"],
-#     wrist=["Wristguards of True Flight"],
-#     hands=["Edgemaster's Handguards"],
-#     fingers=["Master Dragonslayer's Ring","Band of Accuria"],
-#     trinkets=["Drake Fang Talisman","Ramstein's Lightning Bolts"],
-#     back=["Elementium Threaded Cloak"],
-#     mh=["Thunderfury, Blessed Blade of the Windseeker"],
-#     oh=["Elementium Reinforced Bulwark"],
-#     th=[],
-#     ranged=["Striker's Mark"],
-#     zg_enchants=0,
-#     )
-# bpc.addChar(
-#     name="Bandakar",
-#     spec_class=SpecClass.PROT_THREAT_WARRIOR,
-#     head=["Helm of Wrath"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Warlord's Plate Shoulders"],
-#     chest=["Warlord's Plate Armo"],
-#     waist=["Waistband of Wrath"],
-#     legs=["General's Plate Leggings"],
-#     feet=["General's Plate Boots"],
-#     wrist=["Wristguards of True Flight"],
-#     hands=["General's Plate Gauntlets"],
-#     fingers=["Quick Strike Ring","Band of Accuria"],
-#     trinkets=["Blackhand's Breadth","Hand of Justice"],
-#     back=["Dragon's Blood Cape"],
-#     mh=["Crul'shorukh, Edge of Chaos"],
-#     oh=["Elementium Reinforced Bulwark"],
-#     th=[],
-#     ranged=["Striker's Mark"],
-#     zg_enchants=2,
-#     )
-# bpc.addChar(
-#     name="Guliveris",
-#     spec_class=SpecClass.PROT_THREAT_WARRIOR,
-#     head=["Helm of Wrath"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Warlord's Plate Shoulders"],
-#     chest=["Warlord's Plate Armo"],
-#     waist=["Waistband of Wrath"],
-#     legs=["Legplates of Wrath"],
-#     feet=["Dark Iron Boots"],
-#     wrist=["Wristguards of True Flight"],
-#     hands=["Gauntlets of Might"],
-#     fingers=["Master Dragonslayer's Ring","Don Julio's Band"],
-#     trinkets=["Blackhand's Breadth","Lifegiving Gem"],
-#     back=["Shifting Cloak"],
-#     mh=["Perdition's Blade"],
-#     oh=["Doom's Edge"],
-#     th=[],
-#     ranged=["Satyr's Bow"],
-#     zg_enchants=2,
-#     )
-# bpc.addChar(
-#     name="Pemberstone",
-#     spec_class=SpecClass.PROT_THREAT_WARRIOR,
-#     head=["Foror's Eyepatch"],
-#     neck=["Onyxia Tooth Pendant"],
-#     shoulder=["Abyssal Leather Shoulders"],
-#     chest=["Malfurion's Blessed Bulwark"],
-#     waist=["Belt of Preserved Heads"],
-#     legs=["Abyssal Leather Leggings"],
-#     feet=["Boots of the Shadow Flame"],
-#     wrist=["Wristguards of Stability"],
-#     hands=["Aged Core Leather Gloves"],
-#     fingers=["Circle of Applied Force","Band of Accuria"],
-#     trinkets=["Mark of Tyranny","Rune of the Guard Captain"],
-#     back=["Dragon's Blood Cape"],
-#     mh=[],
-#     oh=[],
-#     th=["Draconic Maul"],
-#     ranged=["Idol of Brutality"],
-#     zg_enchants=0,
-#     )
+bpc.addChar(
+    name="Akecheta",
+    spec_class=SpecClass.FURY_WARRIOR,
+    head=["Lionheart Helm"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Drake Talon Pauldrons"],
+    chest=["Malfurion's Blessed Bulwark"],
+    waist=["Onslaught Girdle"],
+    legs=["Abyssal Plate Legplates of Striking"],
+    feet=["Chromatic Boots"],
+    wrist=["Wristguards of Stability"],
+    hands=["Edgemaster's Handguards"],
+    fingers=["Quick Strike Ring","Seal of the Gurubashi Berserker"],
+    trinkets=["Hand of Justice","Drake Fang Talisman"],
+    back=["Might of the Tribe"],
+    mh=["Crul'shorukh, Edge of Chaos"],
+    oh=["Brutality Blade"],
+    th=[],
+    ranged=["Striker's Mark"],
+    zg_enchants=0,
+    )
+bpc.addChar(
+    name="Flatzz",
+    spec_class=SpecClass.FURY_WARRIOR,
+    head=["Lionheart Helm"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Drake Talon Pauldrons"],
+    chest=["Savage Gladiator Chain"],
+    waist=["Zandalar Vindicator's Belt"],
+    legs=["Eldritch Reinforced Legplates"],
+    feet=["Chromatic Boots"],
+    wrist=["Zandalar Vindicator's Armguards"],
+    hands=["Edgemaster's Handguards"],
+    fingers=["Quick Strike Ring","Don Julio's Band"],
+    trinkets=["Hand of Justice","Blackhand's Breadth"],
+    back=["Cloak of Draconic Might"],
+    mh=["Deathbringer"],
+    oh=["Core Hound Tooth"],
+    th=[],
+    ranged=["Striker's Mark"],
+    zg_enchants=0,
+    )
+bpc.addChar(
+    name="Chango",
+    spec_class=SpecClass.FURY_WARRIOR,
+    head=["Lionheart Helm"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Drake Talon Pauldrons"],
+    chest=["Savage Gladiator Chain"],
+    waist=["Onslaught Girdle"],
+    legs=["Legionnaire's Plate Leggings"],
+    feet=["Chromatic Boots"],
+    wrist=["Zandalar Vindicator's Armguards"],
+    hands=["Flameguard Gauntlets"],
+    fingers=["Quick Strike Ring","Don Julio's Band"],
+    trinkets=["Hand of Justice","Drake Fang Talisman"],
+    back=["Cape of the Black Baron"],
+    mh=["Crul'shorukh, Edge of Chaos"],
+    oh=["Doom's Edge"],
+    th=[],
+    ranged=["Blastershot Launcher"],
+    zg_enchants=0,
+    )
+bpc.addChar(
+    name="Dohvyk",
+    spec_class=SpecClass.FURY_WARRIOR,
+    head=["Lionheart Helm"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Drake Talon Pauldrons"],
+    chest=["Savage Gladiator Chain"],
+    waist=["Zandalar Vindicator's Belt"],
+    legs=["Bloodsoaked Legplates"],
+    feet=["Boots of the Shadow Flame"],
+    wrist=["Battleborn Armbraces"],
+    hands=["Flameguard Gauntlets"],
+    fingers=["Quick Strike Ring","Master Dragonslayer's Ring"],
+    trinkets=["Hand of Justice","Blackhand's Breadth"],
+    back=["Zulian Tigerhide Cloak"],
+    mh=[],
+    oh=[],
+    th=["Bonereaver's Edge"],
+    ranged=["Satyr's Bow"],
+    zg_enchants=0,
+    )
+bpc.addChar(
+    name="Furckinstein",
+    spec_class=SpecClass.FURY_WARRIOR,
+    head=["Crown of Destruction"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Champion's Plate Shoulders"],
+    chest=["Runed Bloodstained Hauberk"],
+    waist=["Onslaught Girdle"],
+    legs=["Legionnaire's Plate Leggings"],
+    feet=["Chromatic Boots"],
+    wrist=["Zandalar Vindicator's Armguards"],
+    hands=["Sacrificial Gauntlets"],
+    fingers=["Quick Strike Ring","Don Julio's Band"],
+    trinkets=["Drake Fang Talisman","Blackhand's Breadth"],
+    back=["Cloak of Firemaw"],
+    mh=[],
+    oh=[],
+    th=["Obsidian Edged Blade"],
+    ranged=["Gurubashi Dwarf Destroyer"],
+    zg_enchants=0,
+    )
+bpc.addChar(
+    name="Dirty",
+    spec_class=SpecClass.FURY_WARRIOR,
+    head=["Lionheart Helm"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Black Dragonscale Shoulders"],
+    chest=["Black Dragonscale Breastplate"],
+    waist=["Zandalar Vindicator's Belt"],
+    legs=["Black Dragonscale Leggings"],
+    feet=["Black Dragonscale Boots"],
+    wrist=["Zandalar Vindicator's Armguards"],
+    hands=["Flameguard Gauntlets"],
+    fingers=["Quick Strike Ring","Don Julio's Band"],
+    trinkets=["Blackhand's Breadth","Diamond Flask"],
+    back=["Zulian Tigerhide Cloak"],
+    mh=["Warblade of the Hakkari (MH)"],
+    oh=["Warblade of the Hakkari (OH)"],
+    th=[],
+    ranged=["Blastershot Launcher"],
+    zg_enchants=0,
+    )
+# Tank
+bpc.addChar(
+    name="Crox",
+    spec_class=SpecClass.PROT_THREAT_WARRIOR,
+    head=["Helm of Endless Rage"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Drake Talon Pauldrons"],
+    chest=["Savage Gladiator Chain"],
+    waist=["Zandalar Vindicator's Belt"],
+    legs=["Legplates of Wrath"],
+    feet=["Core Forged Greaves"],
+    wrist=["Wristguards of True Flight"],
+    hands=["Edgemaster's Handguards"],
+    fingers=["Master Dragonslayer's Ring","Band of Accuria"],
+    trinkets=["Drake Fang Talisman","Ramstein's Lightning Bolts"],
+    back=["Elementium Threaded Cloak"],
+    mh=["Thunderfury, Blessed Blade of the Windseeker"],
+    oh=["Elementium Reinforced Bulwark"],
+    th=[],
+    ranged=["Striker's Mark"],
+    zg_enchants=0,
+    )
+bpc.addChar(
+    name="Bandakar",
+    spec_class=SpecClass.PROT_THREAT_WARRIOR,
+    head=["Helm of Wrath"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Warlord's Plate Shoulders"],
+    chest=["Warlord's Plate Armor"],
+    waist=["Waistband of Wrath"],
+    legs=["General's Plate Leggings"],
+    feet=["General's Plate Boots"],
+    wrist=["Wristguards of True Flight"],
+    hands=["General's Plate Gauntlets"],
+    fingers=["Quick Strike Ring","Band of Accuria"],
+    trinkets=["Blackhand's Breadth","Hand of Justice"],
+    back=["Dragon's Blood Cape"],
+    mh=["Crul'shorukh, Edge of Chaos"],
+    oh=["Elementium Reinforced Bulwark"],
+    th=[],
+    ranged=["Striker's Mark"],
+    zg_enchants=2,
+    )
+bpc.addChar(
+    name="Guliveris",
+    spec_class=SpecClass.PROT_THREAT_WARRIOR,
+    head=["Helm of Wrath"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Warlord's Plate Shoulders"],
+    chest=["Breastplate of Wrath"],
+    waist=["Waistband of Wrath"],
+    legs=["Legplates of Wrath"],
+    feet=["Sabatons of Wrath"],
+    wrist=["Wristguards of True Flight"],
+    hands=["Gauntlets of Might"],
+    fingers=["Master Dragonslayer's Ring","Don Julio's Band"],
+    trinkets=["Blackhand's Breadth","Lifegiving Gem"],
+    back=["Shifting Cloak"],
+    mh=["Perdition's Blade"],
+    oh=["Doom's Edge"],
+    th=[],
+    ranged=["Satyr's Bow"],
+    zg_enchants=2,
+    )
+bpc.addChar(
+    name="Pemberstone",
+    spec_class=SpecClass.FERAL_TANK_DRUID,
+    head=["Foror's Eyepatch"],
+    neck=["Onyxia Tooth Pendant"],
+    shoulder=["Abyssal Leather Shoulders"],
+    chest=["Malfurion's Blessed Bulwark"],
+    waist=["Belt of Preserved Heads"],
+    legs=["Abyssal Leather Leggings"],
+    feet=["Boots of the Shadow Flame"],
+    wrist=["Wristguards of Stability"],
+    hands=["Aged Core Leather Gloves"],
+    fingers=["Circle of Applied Force","Band of Accuria"],
+    trinkets=["Mark of Tyranny","Rune of the Guard Captain"],
+    back=["Dragon's Blood Cape"],
+    mh=[],
+    oh=[],
+    th=["Blessed Qiraji War Hammer"],
+    ranged=[],
+    zg_enchants=0,
+    )
 
 # add loot items to boss loot tables
 # Onyxia
@@ -1239,6 +1278,8 @@ bpc.addLoot(
     ep_map={
         SpecClass.COMBAT_ROGUE:64,
         SpecClass.FURY_WARRIOR:52,
+        SpecClass.PROT_THREAT_WARRIOR:62,
+        SpecClass.FERAL_TANK_DRUID:111,
     },
     )
 bpc.addLoot(
@@ -1249,6 +1290,15 @@ bpc.addLoot(
     ep_map={
         SpecClass.ANY_WARLOCK:16,
         SpecClass.FIRE_MAGE:14,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Helm of Wrath",
+    slot=Slot.HEAD,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:104,
     },
     )
 bpc.addLoot(
@@ -1304,6 +1354,7 @@ bpc.addLoot(
     slot=Slot.OFF_HAND,
     drop_chance_list=[5.86],
     ep_map={
+        SpecClass.FURY_WARRIOR:935,
     },
     )
 bpc.addLoot(
@@ -1374,6 +1425,15 @@ bpc.addLoot(
         SpecClass.ANY_WARLOCK:21,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Gauntlets of Might",
+    slot=Slot.HANDS,
+    drop_chance_list=[30.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:72,
+    },
+    )
 
 # Magmadar
 boss_name = "Magmadar"
@@ -1393,6 +1453,8 @@ bpc.addLoot(
     drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:40,
+        SpecClass.FURY_WARRIOR:42,
+        SpecClass.PROT_THREAT_WARRIOR:49,
     },
     )
 
@@ -1446,6 +1508,7 @@ bpc.addLoot(
     drop_chance_list=[19.00],
     ep_map={
         SpecClass.COMBAT_ROGUE:897,
+        SpecClass.FURY_WARRIOR:894,
     },
     )
 bpc.addLoot(
@@ -1462,34 +1525,6 @@ bpc.addLoot(
 # Golemagg the Incinerator
 boss_name = "Golemagg the Incinerator"
 bpc.addLoot(
-    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
-    loot_name="Fire Runed Grimoire",
-    slot=Slot.OFF_HAND,
-    drop_chance_list=[4.0,9.0,13.0],
-    ep_map={
-        SpecClass.RESTO_DRUID:17,
-    },
-    )
-bpc.addLoot(
-    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
-    loot_name="Quick Strike Ring",
-    slot=Slot.FINGER,
-    drop_chance_list=[4.0,9.0,12.0],
-    ep_map={
-        SpecClass.MARKS_HUNTER:59,
-        SpecClass.COMBAT_ROGUE:59,
-    },
-    )
-bpc.addLoot(
-    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
-    loot_name="Talisman of Ephemeral Power",
-    slot=Slot.TRINKET,
-    drop_chance_list=[4.0,9.0,11.0],
-    ep_map={
-        SpecClass.FIRE_MAGE:29,
-    },
-    )
-bpc.addLoot(
     boss_list=[boss_name],
     loot_name="Staff of Dominance",
     slot=Slot.TWO_HAND,
@@ -1497,6 +1532,15 @@ bpc.addLoot(
     ep_map={
         SpecClass.FIRE_MAGE:59,
         SpecClass.ANY_WARLOCK:63,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Blastershot Launcher",
+    slot=Slot.RANGED,
+    drop_chance_list=[25.00],
+    ep_map={
+        SpecClass.FURY_WARRIOR:20,
     },
     )
 bpc.addLoot(
@@ -1510,16 +1554,6 @@ bpc.addLoot(
     },
     )
 bpc.addLoot(
-    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
-    loot_name="Mana Igniting Cord",
-    slot=Slot.WAIST,
-    drop_chance_list=[4.0,9.0,11.0],
-    ep_map={
-        SpecClass.FIRE_MAGE:40,
-        SpecClass.ANY_WARLOCK:42,
-    },
-    )
-bpc.addLoot(
     boss_list=[boss_name],
     loot_name="Nightslayer Chestpiece",
     slot=Slot.CHEST,
@@ -1528,15 +1562,7 @@ bpc.addLoot(
         SpecClass.COMBAT_ROGUE:89,
     },
     )
-bpc.addLoot(
-    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
-    loot_name="Aged Core Leather Gloves",
-    slot=Slot.HANDS,
-    drop_chance_list=[7.0,7.0,7.0],
-    ep_map={
-        SpecClass.COMBAT_ROGUE:40,
-    },
-    )
+
 
 # Baron Geddon
 boss_name = "Baron Geddon"
@@ -1547,6 +1573,15 @@ bpc.addLoot(
     drop_chance_list=[32.21],
     ep_map={
         SpecClass.RESTO_DRUID:17,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Thunderfury, Blessed Blade of the Windseeker",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[3.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:700,
     },
     )
 
@@ -1564,6 +1599,67 @@ bpc.addLoot(
 
 # Sulfuron Harbinger
 boss_name = "Sulfuron Harbinger"
+
+# Multiple
+bpc.addLoot(
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
+    loot_name="Fire Runed Grimoire",
+    slot=Slot.OFF_HAND,
+    drop_chance_list=[4.0,9.0,13.0],
+    ep_map={
+        SpecClass.RESTO_DRUID:17,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
+    loot_name="Obsidian Edged Blade",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[4.0,9.0,11.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:1160,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
+    loot_name="Quick Strike Ring",
+    slot=Slot.FINGER,
+    drop_chance_list=[4.0,9.0,12.0],
+    ep_map={
+        SpecClass.MARKS_HUNTER:59,
+        SpecClass.COMBAT_ROGUE:59,
+        SpecClass.FURY_WARRIOR:60,
+        SpecClass.PROT_THREAT_WARRIOR:62,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
+    loot_name="Talisman of Ephemeral Power",
+    slot=Slot.TRINKET,
+    drop_chance_list=[4.0,9.0,11.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:29,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
+    loot_name="Mana Igniting Cord",
+    slot=Slot.WAIST,
+    drop_chance_list=[4.0,9.0,11.0],
+    ep_map={
+        SpecClass.FIRE_MAGE:40,
+        SpecClass.ANY_WARLOCK:42,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
+    loot_name="Aged Core Leather Gloves",
+    slot=Slot.HANDS,
+    drop_chance_list=[7.0,7.0,7.0],
+    ep_map={
+        SpecClass.COMBAT_ROGUE:40,
+        SpecClass.FERAL_TANK_DRUID:143,
+    },
+    )
 bpc.addLoot(
     boss_list=["Sulfuron Harbinger","Baron Geddon","Gehennas","Lucifron"],
     loot_name="Ring of Spell Power",
@@ -1584,6 +1680,25 @@ bpc.addLoot(
         SpecClass.RESTO_DRUID:82,
     },
     )
+bpc.addLoot(
+    boss_list=["Sulfuron Harbinger","Shazzrah","Gehennas","Lucifron"],
+    loot_name="Wristguards of Stability",
+    slot=Slot.WRISTS,
+    drop_chance_list=[3.0,3.0,5.0,3.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:48,
+        SpecClass.FERAL_TANK_DRUID:98,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Golemagg the Incinerator","Garr","Magmadar"],
+    loot_name="Flameguard Gauntlets",
+    slot=Slot.HANDS,
+    drop_chance_list=[4.0,9.0,11.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:74,
+    },
+    )
 
 # Majordomo Executus
 boss_name = "Majordomo Executus"
@@ -1595,6 +1710,33 @@ bpc.addLoot(
     ep_map={
         SpecClass.RESTO_DRUID:70,
         SpecClass.RESTO_SHAMAN:76,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Wristguards of True Flight",
+    slot=Slot.WRISTS,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:47,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Core Forged Greaves",
+    slot=Slot.FEET,
+    drop_chance_list=[19.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:70, # 0 for threat
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Core Hound Tooth",
+    slot=Slot.OFF_HAND,
+    drop_chance_list=[10.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:838,
     },
     )
 bpc.addLoot(
@@ -1661,6 +1803,25 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=[boss_name],
+    loot_name="Dragon's Blood Cape",
+    slot=Slot.BACK,
+    drop_chance_list=[27.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:28,
+        SpecClass.FERAL_TANK_DRUID:108,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Onslaught Girdle",
+    slot=Slot.WAIST,
+    drop_chance_list=[15.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:102,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Stormrage Legguards",
     slot=Slot.LEGS,
     drop_chance_list=[20.0],
@@ -1670,11 +1831,21 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=[boss_name],
+    loot_name="Legplates of Wrath",
+    slot=Slot.LEGS,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:126,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Crown of Destruction",
     slot=Slot.HEAD,
     drop_chance_list=[10.0],
     ep_map={
         SpecClass.FURY_WARRIOR:84,
+        SpecClass.PROT_THREAT_WARRIOR:88,
     },
     )
 bpc.addLoot(
@@ -1721,6 +1892,9 @@ bpc.addLoot(
     ep_map={
         SpecClass.MARKS_HUNTER:89,
         SpecClass.COMBAT_ROGUE:66,
+        SpecClass.FURY_WARRIOR:58,
+        SpecClass.PROT_THREAT_WARRIOR:71,
+        SpecClass.FERAL_TANK_DRUID:122,
     },
     )
 bpc.addLoot(
@@ -1739,6 +1913,7 @@ bpc.addLoot(
     drop_chance_list=[13.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:906,
+        SpecClass.PROT_THREAT_WARRIOR:437,
     },
     )
 bpc.addLoot(
@@ -1748,6 +1923,15 @@ bpc.addLoot(
     drop_chance_list=[7.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:68,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Bonereaver's Edge",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:1253,
     },
     )
 
@@ -1871,6 +2055,24 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=[boss_name],
+    loot_name="Waistband of Wrath",
+    slot=Slot.WAIST,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:63,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Helm of Endless Rage",
+    slot=Slot.HEAD,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:79,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Nemesis Belt",
     slot=Slot.WAIST,
     drop_chance_list=[20.38],
@@ -1937,6 +2139,24 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=[boss_name],
+    loot_name="Sabatons of Wrath",
+    slot=Slot.FEET,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:84,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Lifegiving Gem",
+    slot=Slot.TRINKET,
+    drop_chance_list=[30.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:40,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Greaves of Ten Storms",
     slot=Slot.FEET,
     drop_chance_list=[20.0],
@@ -1951,6 +2171,7 @@ bpc.addLoot(
     drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:24,
+        SpecClass.FURY_WARRIOR:24,
     },
     )
 bpc.addLoot(
@@ -2019,6 +2240,8 @@ bpc.addLoot(
     drop_chance_list=[16.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:50,
+        SpecClass.FURY_WARRIOR:50,
+        SpecClass.PROT_THREAT_WARRIOR:50,
     },
     )
 bpc.addLoot(
@@ -2028,6 +2251,15 @@ bpc.addLoot(
     drop_chance_list=[16.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:955,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Legguards of the Fallen Crusader",
+    slot=Slot.LEGS,
+    drop_chance_list=[9.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:78,
     },
     )
 
@@ -2040,6 +2272,15 @@ bpc.addLoot(
     drop_chance_list=[20.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:82,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Circle of Applied Force",
+    slot=Slot.FINGER,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:95,
     },
     )
 
@@ -2061,6 +2302,9 @@ bpc.addLoot(
     drop_chance_list=[18.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:92,
+        SpecClass.FURY_WARRIOR:96,
+        SpecClass.FERAL_TANK_DRUID:136,
+        SpecClass.PROT_THREAT_WARRIOR:110,
     },
     )
 bpc.addLoot(
@@ -2080,6 +2324,16 @@ bpc.addLoot(
     drop_chance_list=[16.0],
     ep_map={
         SpecClass.ANY_WARLOCK:46,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Malfurion's Blessed Bulwark",
+    slot=Slot.CHEST,
+    drop_chance_list=[17.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:80,
+        SpecClass.FERAL_TANK_DRUID:279,
     },
     )
 
@@ -2113,6 +2367,7 @@ bpc.addLoot(
     drop_chance_list=[13.0,13.0,13.0],
     ep_map={
         SpecClass.FURY_WARRIOR:60,
+        SpecClass.PROT_THREAT_WARRIOR:61,
     },
     )
 bpc.addLoot(
@@ -2179,6 +2434,33 @@ bpc.addLoot(
     drop_chance_list=[20.14],
     ep_map={
         SpecClass.RESTO_DRUID:52,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Elementium Reinforced Bulwark",
+    slot=Slot.OFF_HAND,
+    drop_chance_list=[15.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:67,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Elementium Threaded Cloak",
+    slot=Slot.BACK,
+    drop_chance_list=[15.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:54, # actually zero for threat...
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Chromatic Boots",
+    slot=Slot.FEET,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:80,
     },
     )
 bpc.addLoot(
@@ -2255,6 +2537,7 @@ bpc.addLoot(
     drop_chance_list=[9.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:991,
+        SpecClass.FURY_WARRIOR:991,
     },
     )
 bpc.addLoot(
@@ -2276,6 +2559,15 @@ bpc.addLoot(
     drop_chance_list=[19.75],
     ep_map={
         SpecClass.RESTO_DRUID:67,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Breastplate of Wrath",
+    slot=Slot.CHEST,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:112,
     },
     )
 bpc.addLoot(
@@ -2356,6 +2648,9 @@ bpc.addLoot(
     ep_map={
         SpecClass.MARKS_HUNTER:70,
         SpecClass.COMBAT_ROGUE:66,
+        SpecClass.FURY_WARRIOR:68,
+        SpecClass.FERAL_TANK_DRUID:108,
+        SpecClass.PROT_THREAT_WARRIOR:75,
     },
     )
 bpc.addLoot(
@@ -2365,6 +2660,7 @@ bpc.addLoot(
     drop_chance_list=[9.11],
     ep_map={
         SpecClass.MARKS_HUNTER:86,
+        SpecClass.FURY_WARRIOR:1408,
     },
     )
 bpc.addLoot(
@@ -2412,6 +2708,18 @@ bpc.addLoot(
     drop_chance_list=[19.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:80,
+        SpecClass.FURY_WARRIOR:84,
+        SpecClass.FERAL_TANK_DRUID:265,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Crul'shorukh, Edge of Chaos",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[9.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:1030,
+        SpecClass.PROT_THREAT_WARRIOR:507,
     },
     )
 
@@ -2424,6 +2732,28 @@ bpc.addLoot(
     drop_chance_list=[5.0],
     ep_map={
         SpecClass.HOLY_PRIEST:26,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Doom's Edge",
+    slot=Slot.OFF_HAND,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:870,
+        SpecClass.PROT_THREAT_WARRIOR:421,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Cloak of Draconic Might",
+    slot=Slot.RANGED,
+    drop_chance_list=[5.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:48,
+        SpecClass.PROT_THREAT_WARRIOR:49,
+        SpecClass.COMBAT_ROGUE:48,
+        SpecClass.FERAL_TANK_DRUID:100,
     },
     )
 bpc.addLoot(
@@ -2538,6 +2868,7 @@ bpc.addLoot(
     drop_chance_list=[18.41],
     ep_map={
         SpecClass.MARKS_HUNTER:58,
+        SpecClass.FURY_WARRIOR:33,
     },
     )
 bpc.addLoot(
@@ -2547,6 +2878,15 @@ bpc.addLoot(
     drop_chance_list=[20.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:58,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Runed Bloodstained Hauberk",
+    slot=Slot.CHEST,
+    drop_chance_list=[9.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:78,
     },
     )
 
@@ -2561,6 +2901,15 @@ boss_name = "High Priestess Arlokk"
 
 # Multiple
 bpc.addLoot(
+    boss_list=["Hakkar","Bloodlord Mandokir"],
+    loot_name="Warblade of the Hakkari (OH)",
+    slot=Slot.OFF_HAND,
+    drop_chance_list=[4.0,9.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:796,
+    },
+    )
+bpc.addLoot(
     boss_list=["High Priestess Arlokk","High Priestess Mar'li","High Priest Thekal","High Priest Venoxis","High Priestess Jeklik"],
     loot_name="Band of Servitude",
     slot=Slot.FINGER,
@@ -2571,12 +2920,49 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=["High Priestess Arlokk","High Priestess Mar'li","High Priest Thekal","High Priest Venoxis","High Priestess Jeklik"],
+    loot_name="Sacrificial Gauntlets",
+    slot=Slot.HANDS,
+    drop_chance_list=[10.0,10.0,10.0,10.0,10.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:78,
+    },
+    )
+bpc.addLoot(
+    boss_list=["High Priestess Arlokk","High Priestess Mar'li","High Priest Thekal","High Priest Venoxis","High Priestess Jeklik"],
+    loot_name="Might of the Tribe",
+    slot=Slot.BACK,
+    drop_chance_list=[9.0,9.0,9.0,9.0,9.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:28,
+    },
+    )
+bpc.addLoot(
+    boss_list=["High Priestess Arlokk","High Priestess Mar'li","High Priest Thekal","High Priest Venoxis","High Priestess Jeklik"],
     loot_name="Belt of Untapped Power",
     slot=Slot.WAIST,
     drop_chance_list=[9.0,9.0,9.0,9.0,9.0],
     ep_map={
         SpecClass.FIRE_MAGE:30,
         SpecClass.ANY_WARLOCK:31,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Bloodlord Mandokir","High Priest Thekal","High Priest Venoxis","High Priestess Arlokk","High Priestess Jeklik","Jin'do the Hexxer","High Priestess Mar'li"],
+    loot_name="Zandalar Vindicator's Belt",
+    slot=Slot.WAIST,
+    drop_chance_list=[9.0,18.0,9.0,19.0,10.0,10.0,18.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:70,
+        SpecClass.PROT_THREAT_WARRIOR:72,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Bloodlord Mandokir","High Priest Thekal","High Priest Venoxis","High Priestess Arlokk","High Priestess Jeklik","Jin'do the Hexxer","High Priestess Mar'li"],
+    loot_name="Zandalar Vindicator's Armguards",
+    slot=Slot.WRISTS,
+    drop_chance_list=[9.0,18.0,9.0,19.0,10.0,10.0,18.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:39,
     },
     )
 
@@ -2637,11 +3023,30 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=[boss_name],
+    loot_name="Warblade of the Hakkari (MH)",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[12.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:829,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Bloodsoaked Legplates",
+    slot=Slot.LEGS,
+    drop_chance_list=[14.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:72,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Gurubashi Dwarf Destroyer",
     slot=Slot.RANGED,
     drop_chance_list=[12.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:30,
+        SpecClass.FURY_WARRIOR:30,
     },
     )
 bpc.addLoot(
@@ -2694,8 +3099,31 @@ bpc.addLoot(
     },
     )
 
+# Gahz'ranka
+boss_name = "Gahz'ranka"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Foror's Eyepatch",
+    slot=Slot.HEAD,
+    drop_chance_list=[13.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:88,
+        SpecClass.FURY_WARRIOR:84,
+        SpecClass.FERAL_TANK_DRUID:209,
+    },
+    )
+
 # Kurinnaxx
 boss_name = "Kurinnaxx"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Toughened Silithid Hide Gloves",
+    slot=Slot.HANDS,
+    drop_chance_list=[19.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:166,
+    },
+    )
 
 # General Rajaxx
 boss_name = "General Rajaxx"
@@ -2706,6 +3134,16 @@ bpc.addLoot(
     drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:66,
+        SpecClass.FURY_WARRIOR:66,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Legplates of the Qiraji Command",
+    slot=Slot.LEGS,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:80,
     },
     )
 
@@ -2724,6 +3162,15 @@ bpc.addLoot(
 
 # Buru the Gorger
 boss_name = "Buru the Gorger"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Slime Kickers",
+    slot=Slot.FEET,
+    drop_chance_list=[18.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:68,
+    },
+    )
 
 # Ayamiss the Hunter
 boss_name = "Ayamiss the Hunter"
@@ -2739,6 +3186,27 @@ bpc.addLoot(
         SpecClass.RESTO_DRUID:64,
         SpecClass.HOLY_PRIEST:67,
         SpecClass.RESTO_SHAMAN:82,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Sandstorm Cloak",
+    slot=Slot.NECK,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:129,
+        SpecClass.PROT_THREAT_WARRIOR:25,
+        SpecClass.FURY_WARRIOR:24,
+        SpecClass.COMBAT_ROGUE:13,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Bracers of Brutality",
+    slot=Slot.WRISTS,
+    drop_chance_list=[17.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:54,
     },
     )
 bpc.addLoot(
@@ -2759,6 +3227,7 @@ bpc.addLoot(
     drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:37,
+        SpecClass.FURY_WARRIOR:37,
     },
     )
 bpc.addLoot(
@@ -2783,6 +3252,16 @@ bpc.addLoot(
     )
 
 # Multiple
+bpc.addLoot(
+    boss_list=["Kurinnaxx","Buru the Gorger","Ayamiss the Hunter","General Rajaxx"],
+    loot_name="Drape of Unyielding Strength",
+    slot=Slot.BACK,
+    drop_chance_list=[59.0,20.0,20.0,72.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:59,
+        SpecClass.PROT_THREAT_WARRIOR:66,
+    },
+    )
 bpc.addLoot(
     boss_list=["Moam","Buru the Gorger","Ayamiss the Hunter","Ossirian the Unscarred"],
     loot_name="Gavel of Infinite Wisdom",
@@ -2848,6 +3327,7 @@ bpc.addLoot(
     ep_map={
         SpecClass.COMBAT_ROGUE:50,
         SpecClass.FURY_WARRIOR:56,
+        SpecClass.PROT_THREAT_WARRIOR:65,
     },
     )
 
@@ -2860,6 +3340,9 @@ bpc.addLoot(
     drop_chance_list=[17.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:61,
+        SpecClass.PROT_THREAT_WARRIOR:66,
+        SpecClass.FURY_WARRIOR:58,
+        SpecClass.FERAL_TANK_DRUID:145,
     },
     )
 bpc.addLoot(
@@ -2882,6 +3365,15 @@ bpc.addLoot(
         SpecClass.RESTO_SHAMAN:101,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Breastplate of Annihilation",
+    slot=Slot.CHEST,
+    drop_chance_list=[17.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:114,
+    },
+    )
 
 # Battleguard Sartura
 boss_name = "Battleguard Sartura"
@@ -2892,6 +3384,15 @@ bpc.addLoot(
     drop_chance_list=[16.0],
     ep_map={
         SpecClass.RESTO_SHAMAN:87,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Thick Qirajihide Belt",
+    slot=Slot.WAIST,
+    drop_chance_list=[18.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:174,
     },
     )
 bpc.addLoot(
@@ -2910,6 +3411,8 @@ bpc.addLoot(
     drop_chance_list=[16.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:87,
+        SpecClass.FURY_WARRIOR:96,
+        SpecClass.FERAL_TANK_DRUID:203,
     },
     )
 bpc.addLoot(
@@ -2935,9 +3438,27 @@ bpc.addLoot(
         SpecClass.RESTO_SHAMAN:84,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Boots of the Fallen Hero",
+    slot=Slot.FEET,
+    drop_chance_list=[34.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:74,
+    },
+    )
 
 # Princess Yauj
 boss_name = "Princess Yauj"
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Bile-Covered Gauntlets",
+    slot=Slot.HANDS,
+    drop_chance_list=[17.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:183,
+    },
+    )
 
 # Lord Kri
 boss_name = "Lord Kri"
@@ -2948,6 +3469,8 @@ bpc.addLoot(
     drop_chance_list=[27.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:101,
+        SpecClass.FURY_WARRIOR:83,
+        SpecClass.FERAL_TANK_DRUID:169,
     },
     )
 bpc.addLoot(
@@ -2982,6 +3505,7 @@ bpc.addLoot(
     ep_map={
         SpecClass.COMBAT_ROGUE:67,
         SpecClass.FURY_WARRIOR:64,
+        SpecClass.PROT_THREAT_WARRIOR:66,
     },
     )
 bpc.addLoot(
@@ -2991,7 +3515,9 @@ bpc.addLoot(
     drop_chance_list=[17.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:75,
-        SpecClass.COMBAT_ROGUE:62,
+        SpecClass.FURY_WARRIOR:62,
+        SpecClass.PROT_THREAT_WARRIOR:64,
+        SpecClass.FERAL_TANK_DRUID:199,
     },
     )
 bpc.addLoot(
@@ -3001,6 +3527,7 @@ bpc.addLoot(
     drop_chance_list=[10.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:1001,
+        SpecClass.FURY_WARRIOR:998,
     },
     )
 bpc.addLoot(
@@ -3023,6 +3550,24 @@ bpc.addLoot(
         SpecClass.RESTO_SHAMAN:30,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Scaled Sand Reaver Leggings",
+    slot=Slot.LEGS,
+    drop_chance_list=[15.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:102,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Barb of the Sand Reaver",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[10.0],
+    ep_map={
+        SpecClass.MARKS_HUNTER:114,
+    },
+    )
 
 # Viscidus
 boss_name = "Viscidus"
@@ -3033,6 +3578,7 @@ bpc.addLoot(
     drop_chance_list=[13.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:63,
+        SpecClass.FURY_WARRIOR:60,
     },
     )
 bpc.addLoot(
@@ -3055,6 +3601,16 @@ bpc.addLoot(
     drop_chance_list=[8.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:34,
+        SpecClass.MARKS_HUNTER:968,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Hive Defiler Wristguards",
+    slot=Slot.WRISTS,
+    drop_chance_list=[14.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:64,
     },
     )
 bpc.addLoot(
@@ -3093,6 +3649,15 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=[boss_name],
+    loot_name="Ring of Emperor Vek'lor",
+    slot=Slot.FINGER,
+    drop_chance_list=[12.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:122,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Doomcaller's Circlet",
     slot=Slot.HEAD,
     drop_chance_list=[80.0],
@@ -3126,6 +3691,7 @@ bpc.addLoot(
     drop_chance_list=[15.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:65,
+        SpecClass.FURY_WARRIOR:66,
     },
     )
 bpc.addLoot(
@@ -3135,6 +3701,7 @@ bpc.addLoot(
     drop_chance_list=[14.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:60,
+        SpecClass.FERAL_TANK_DRUID:229,
     },
     )
 bpc.addLoot(
@@ -3166,6 +3733,15 @@ bpc.addLoot(
         SpecClass.ANY_WARLOCK:39,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Kalimdor's Revenge",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[9.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:1355,
+    },
+    )
 
 # Ouro
 boss_name = "Ouro"
@@ -3176,6 +3752,26 @@ bpc.addLoot(
     drop_chance_list=[15.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:41,
+        SpecClass.MARKS_HUNTER:1035,
+        SpecClass.FURY_WARRIOR:38,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Genesis Trousers",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:211,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Conqueror's Legguards",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:107,
     },
     )
 bpc.addLoot(
@@ -3225,6 +3821,18 @@ bpc.addLoot(
     drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:62,
+        SpecClass.FURY_WARRIOR:48,
+        SpecClass.PROT_THREAT_WARRIOR:49,
+        SpecClass.FERAL_TANK_DRUID:141,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Mark of C'Thun",
+    slot=Slot.NECK,
+    drop_chance_list=[20.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:116,
     },
     )
 bpc.addLoot(
@@ -3247,6 +3855,15 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=[boss_name],
+    loot_name="Conqueror's Breastplate",
+    slot=Slot.CHEST,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:92,
+    },
+    )
+bpc.addLoot(
+    boss_list=[boss_name],
     loot_name="Amulet of the Fallen God",
     slot=Slot.NECK,
     drop_chance_list=[100.0],
@@ -3261,6 +3878,7 @@ bpc.addLoot(
     drop_chance_list=[8.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:1058,
+        SpecClass.FURY_WARRIOR:1058,
     },
     )
 bpc.addLoot(
@@ -3270,6 +3888,8 @@ bpc.addLoot(
     drop_chance_list=[17.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:105,
+        SpecClass.FURY_WARRIOR:104,
+        SpecClass.FERAL_TANK_DRUID:224,
     },
     )
 bpc.addLoot(
@@ -3334,6 +3954,15 @@ bpc.addLoot(
         SpecClass.ANY_WARLOCK:58,
     },
     )
+bpc.addLoot(
+    boss_list=[boss_name],
+    loot_name="Dark Edge of Insanity",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[8.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:1476,
+    },
+    )
 
 # AQ40 Trash
 boss_name = "AQ40 Trash"
@@ -3349,6 +3978,15 @@ bpc.addLoot(
     )
 
 # Multiple
+bpc.addLoot(
+    boss_list=["Vem","Princess Yauj","Lord Kri"],
+    loot_name="Triad Girdle",
+    slot=Slot.WAIST,
+    drop_chance_list=[22.0,22.0,22.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:71,
+    },
+    )
 # Imperial Qiraji Regalia
 bpc.addLoot(
     boss_list=["Battleguard Sartura","Vem","Princess Yauj","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
@@ -3363,21 +4001,21 @@ bpc.addLoot(
     )
 bpc.addLoot(
     boss_list=["Battleguard Sartura","Vem","Princess Yauj","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
+    loot_name="Blessed Qiraji War Hammer",
+    slot=Slot.TWO_HAND,
+    drop_chance_list=[8.0,9.0,15.0,7.0,10.0,9.0,8.0,10.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:368,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Battleguard Sartura","Vem","Princess Yauj","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
     loot_name="Blessed Qiraji Acolyte Staff",
     slot=Slot.TWO_HAND,
     drop_chance_list=[8.0,9.0,15.0,7.0,10.0,9.0,8.0,10.0],
     ep_map={
         SpecClass.FIRE_MAGE:121,
         SpecClass.ANY_WARLOCK:137,
-    },
-    )
-bpc.addLoot(
-    boss_list=["Battleguard Sartura","Vem","Princess Yauj","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
-    loot_name="Blessed Qiraji War Hammer",
-    slot=Slot.TWO_HAND,
-    drop_chance_list=[8.0,9.0,15.0,7.0,10.0,9.0,8.0,10.0],
-    ep_map={
-        SpecClass.FERAL_DRUID:368,
     },
     )
 # Imperial Qiraji Armaments
@@ -3388,6 +4026,16 @@ bpc.addLoot(
     drop_chance_list=[7.0,8.0,16.0,18.0,8.0,21.0,8.0,8.0,8.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:992,
+        SpecClass.FURY_WARRIOR:991,
+    },
+    )
+bpc.addLoot(
+    boss_list=["Battleguard Sartura","Vem","Princess Yauj","Lord Kri","Fankriss the Unyielding","Viscidus","Princess Huhuran","Twin Emperors","Ouro"],
+    loot_name="Blessed Qiraji War Axe",
+    slot=Slot.MAIN_HAND,
+    drop_chance_list=[7.0,8.0,16.0,18.0,8.0,21.0,8.0,8.0,8.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:1012,
     },
     )
 # Qiraji Bindings of Command and Qiraji Bindings of Dominance
@@ -3407,6 +4055,7 @@ bpc.addLoot(
     drop_chance_list=[100.0,100.0],
     ep_map={
         SpecClass.FURY_WARRIOR:76,
+        SpecClass.PROT_THREAT_WARRIOR:85,
     },
     )
 bpc.addLoot(
@@ -3447,6 +4096,7 @@ bpc.addLoot(
         SpecClass.RESTO_DRUID:44,
         SpecClass.MARKS_HUNTER:48,
         SpecClass.HOLY_PRIEST:47,
+        SpecClass.COMBAT_ROGUE:36,
     },
     )
 bpc.addLoot(
@@ -3535,7 +4185,9 @@ bpc.addLoot(
     drop_chance_list=[100.0],
     ep_map={
         SpecClass.MARKS_HUNTER:57,
-        SpecClass.COMBAT_ROGUE:46
+        SpecClass.COMBAT_ROGUE:46,
+        SpecClass.FURY_WARRIOR:40,
+        SpecClass.PROT_THREAT_WARRIOR:44,
     },
     )
 bpc.addLoot(
@@ -3546,6 +4198,8 @@ bpc.addLoot(
     ep_map={
         SpecClass.MARKS_HUNTER:67,
         SpecClass.COMBAT_ROGUE:57,
+        SpecClass.FURY_WARRIOR:56,
+        SpecClass.PROT_THREAT_WARRIOR:65,
     },
     )
 bpc.addLoot(
@@ -3556,6 +4210,7 @@ bpc.addLoot(
     ep_map={
         SpecClass.MARKS_HUNTER:62,
         SpecClass.COMBAT_ROGUE:49,
+        SpecClass.FURY_WARRIOR:35,
     },
     )
 bpc.addLoot(
@@ -3696,6 +4351,8 @@ bpc.addLoot(
     drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:24,
+        SpecClass.FURY_WARRIOR:23,
+        SpecClass.PROT_THREAT_WARRIOR:30,
     },
     )
 bpc.addLoot(
@@ -3705,6 +4362,7 @@ bpc.addLoot(
     drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:40,
+        SpecClass.FURY_WARRIOR:40,
     },
     )
 bpc.addLoot(
@@ -3714,6 +4372,8 @@ bpc.addLoot(
     drop_chance_list=[100.0],
     ep_map={
         SpecClass.COMBAT_ROGUE:50,
+        SpecClass.FURY_WARRIOR:50,
+        SpecClass.PROT_THREAT_WARRIOR:50,
     },
     )
 bpc.addLoot(
@@ -3787,6 +4447,7 @@ bpc.addLoot(
     drop_chance_list=[100.0],
     ep_map={
         SpecClass.FURY_WARRIOR:116,
+        SpecClass.PROT_THREAT_WARRIOR:134,
     },
     )
 bpc.addLoot(
@@ -3807,6 +4468,224 @@ bpc.addLoot(
         SpecClass.FURY_WARRIOR:59,
     },
     )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Champion's Plate Shoulders",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:54,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Black Dragonscale Shoulders",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:40,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Savage Gladiator Chain",
+    slot=Slot.CHEST,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:80,
+        SpecClass.PROT_THREAT_WARRIOR:85,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Black Dragonscale Breastplate",
+    slot=Slot.CHEST,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:50,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Mugger's Belt",
+    slot=Slot.WAIST,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:20,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Edgemaster's Handguards",
+    slot=Slot.HANDS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:110,
+        SpecClass.PROT_THREAT_WARRIOR:110,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Eldritch Reinforced Legplates",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:59,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Legionnaire's Plate Leggings",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:64,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Battleborn Armbraces",
+    slot=Slot.WRISTS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:40,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Diamond Flask",
+    slot=Slot.TRINKET,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:1,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Black Dragonscale Boots",
+    slot=Slot.FEET,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:28,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Black Dragonscale Leggings",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FURY_WARRIOR:54,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Ramstein's Lightning Bolts",
+    slot=Slot.TRINKET,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:40,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="General's Plate Boots",
+    slot=Slot.FEET,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:76,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="General's Plate Leggings",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:111,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="General's Plate Gauntlets",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:62,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Warlord's Plate Armor",
+    slot=Slot.CHEST,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:69,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Warlord's Plate Shoulders",
+    slot=Slot.CHEST,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:80,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Shifting Cloak",
+    slot=Slot.BACK,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.PROT_THREAT_WARRIOR:42,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Abyssal Leather Shoulders",
+    slot=Slot.SHOULDER,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:88,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Belt of Preserved Heads",
+    slot=Slot.WAIST,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:161,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Abyssal Leather Leggings",
+    slot=Slot.LEGS,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:92,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Mark of Tyranny",
+    slot=Slot.TRINKET,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:87,
+    },
+    )
+bpc.addLoot(
+    boss_list=["CURRENT"],
+    loot_name="Rune of the Guard Captain",
+    slot=Slot.TRINKET,
+    drop_chance_list=[100.0],
+    ep_map={
+        SpecClass.FERAL_TANK_DRUID:52,
+    },
+    ) 
 
 # do the thing
 bpc.calc()
